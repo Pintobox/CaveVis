@@ -1,0 +1,12 @@
+name: PintoAntiCheat
+version: '${version}'
+main: me.pintobox.pintoAntiCheat.PintoAntiCheat
+api-version: '1.21.11'
+authors: [Pintobox]
+description: Server side cave visibility filtering
+
+commands:
+  cavevis:
+    description: Control cave visibility and profiling
+  blockplacing:
+    description: Enable or disable block placement server-wide
