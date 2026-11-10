@@ -4,14 +4,47 @@ An experimental Minecraft 1.21.11 server plugin. Its main feature, CaveVis,
 limits the underground terrain sent to each player to reduce what freecam
 clients can see.
 
-## Demo
+## Build and run
 
-The test setup uses Java 21 and a custom PintoPaper build in a sibling
-`PintoPaper` folder. Start the test server with the `runServer` Gradle task.
+Install Git and JDK 21, and make sure your terminal uses Java 21.
+You’ll need access to both GitHub repositories. Clone them side by side
+because the plugin’s `runServer` task looks for `../PintoPaper`.
+
+From the folder where you want both projects, run these PowerShell commands:
+
+```powershell
+git clone https://github.com/Pintobox/PintoAntiCheat.git
+git clone https://github.com/Pintobox/PintoPaper.git
+cd PintoPaper
+git checkout --detach 57b245da22fcea6cf946f865083665e47dc42a51
+.\gradlew.bat applyPatches
+.\gradlew.bat createMojmapPaperclipJar -PpublishDevBundle publishToMavenLocal
+cd ..\PintoAntiCheat
+.\gradlew.bat runServer --refresh-dependencies
+```
+
+The Paper build creates the server JAR and publishes the matching
+development bundle to your local Maven repository. PintoAntiCheat
+compiles against that bundle and runs against the custom server JAR.
+
+## Demo
 
 1. Join the server. Terrain loads normally at first.
 2. Run `/cavevis raybuild 16` and wait for the visibility cache to finish building.
 3. Run `/cavevis reveal` to turn on terrain filtering for your player.
+
+## How CaveVis works
+
+CaveVis groups blocks into 2×2×2 cells and stores one opacity bit per cell.
+A cell stops a ray only when all eight blocks are opaque. This keeps narrow
+openings from being treated as solid.
+
+Worker threads cast rays from the player's eye position through this grid.
+When a 16×16×16 section contains no opaque cells, a ray can skip the
+individual cell checks and jump to the section boundary.
+
+The scan identifies sections to reveal. The server uses that result to
+filter the chunk data it sends to each player.
 
 ## Code overview
 
