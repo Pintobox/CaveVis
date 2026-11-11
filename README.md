@@ -34,6 +34,43 @@ compiles against that bundle and runs against the custom server JAR.
 3. Optionally run `/cavevis raybuild 16` to preload opacity data around your position.
    Preloaded data survives chunk unloads until `/cavevis rayclear` releases it.
 
+## Preloading from another plugin
+
+Add PintoAntiCheat as a `compileOnly` dependency and declare
+`depend: [PintoAntiCheat]` in your plugin's `plugin.yml`.
+
+Call the API on the server thread. The coordinates are chunk coordinates,
+and radius 16 covers a 33 × 33 square of chunk columns.
+
+```java
+CaveVisApi caveVis = Bukkit.getServicesManager().load(CaveVisApi.class);
+if (caveVis == null) {
+    throw new IllegalStateException("CaveVis API is unavailable");
+}
+
+caveVis.preload(world, centerChunkX, centerChunkZ, 16)
+    .whenComplete((ignored, error) -> {
+        if (error != null) {
+            getLogger().warning("CaveVis preload failed: " + error);
+            return;
+        }
+
+        startMatch();
+    });
+```
+
+Import `me.pintobox.pintoAntiCheat.cavevis.api.CaveVisApi`. The future
+completes successfully after CaveVis publishes and pins the opacity data.
+Only one preload runs at a time.
+
+Save the arena's UUID with `arenaWorld.getUID()`. At match teardown, call
+`caveVis.releasePreloaded(arenaWorldId)` on the server thread. This cancels
+any active preload for that world and releases its pins. You can call it
+after the world unloads. Chunks that are still loaded stay cached until
+they unload, and preloads in other worlds stay pinned.
+
+`/cavevis rayclear` releases preload pins across all worlds.
+
 ## How CaveVis works
 
 CaveVis groups blocks into 2×2×2 cells and stores one opacity bit per cell.

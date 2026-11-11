@@ -65,25 +65,35 @@ public final class CaveVisVisibility {
         }
     }
 
-    public BitSet column(
+    public void writeColumn(
+        BitSet result,
         int x,
         int z,
         int bottom,
         int height,
         int cutoff
     ) {
-        BitSet result = new BitSet(height);
+        result.clear();
 
-        for (int i = 0; i < height; i++) {
-            int y = bottom + i;
-            int index = grid.index(x, y, z);
+        int surfaceStart = Math.clamp(cutoff - bottom, 0, height);
+        result.set(surfaceStart, height);
 
-            if (y >= cutoff
-                || (index >= 0 && sections.get(index))) {
-                result.set(i);
-            }
+        int firstY = Math.max(bottom, grid.bottom);
+        int endY = Math.min(cutoff, Math.min(bottom + height, grid.bottom + grid.height));
+        if (firstY >= endY) {
+            return;
         }
 
-        return result;
+        int firstIndex = grid.index(x, firstY, z);
+        if (firstIndex < 0) {
+            return;
+        }
+
+        int endIndex = firstIndex + endY - firstY;
+        for (int index = sections.nextSetBit(firstIndex);
+             index >= 0 && index < endIndex;
+             index = sections.nextSetBit(index + 1)) {
+            result.set(firstY - bottom + index - firstIndex);
+        }
     }
 }

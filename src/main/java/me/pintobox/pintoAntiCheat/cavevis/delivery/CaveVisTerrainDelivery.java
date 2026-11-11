@@ -116,11 +116,22 @@ public final class CaveVisTerrainDelivery
         s.worldTop = Math.floorDiv(player.getWorld().getMaxHeight(), 16);
         s.worldBottom = Math.floorDiv(player.getWorld().getMinHeight(), 16);
 
-        if (states.putIfAbsent(player.getUniqueId(), s) != null) {
+        UUID playerId = player.getUniqueId();
+
+        State registered = states.compute(playerId, (id, previous) ->
+            previous != null && previous.channel == channel ? previous : s
+        );
+
+        if (registered != s) {
             return;
         }
 
+        channel.closeFuture().addListener(ignored -> states.remove(playerId, s));
+
         channel.eventLoop().execute(() -> {
+            if (!channel.isActive() || states.get(playerId) != s) {
+                return;
+            }
             if (channel.pipeline().get(HANDLER) != null) return;
 
             channel.pipeline().addBefore(
@@ -455,7 +466,12 @@ public final class CaveVisTerrainDelivery
 
                 if (c.restoreOnly) continue;
 
-                c.wanted = s.visible.column(
+                if (c.wanted == null) {
+                    c.wanted = new BitSet(height);
+                }
+
+                s.visible.writeColumn(
+                    c.wanted,
                     (int) key,
                     (int) (key >> 32),
                     bottom,
@@ -510,6 +526,7 @@ public final class CaveVisTerrainDelivery
                 Column c = entry.getValue();
 
                 c.inFlight = false;
+                c.retryScheduled = false;
                 c.writingMask = null;
                 c.fresh = true;
                 c.queued = false;
@@ -870,7 +887,7 @@ public final class CaveVisTerrainDelivery
                     c.queued = false;
                 }
 
-                if (s.columns.get(key) != c || c.inFlight) {
+                if (s.columns.get(key) != c || c.inFlight || c.retryScheduled) {
                     continue;
                 }
 
@@ -932,12 +949,7 @@ public final class CaveVisTerrainDelivery
             );
 
             if (packet == null) {
-                synchronized (s) {
-                    if (s.columns.get(plan.key) == plan.column) {
-                        s.columns.remove(plan.key);
-                    }
-                }
-
+                retryMissingColumn(player, s, plan);
                 return;
             }
 
@@ -986,10 +998,54 @@ public final class CaveVisTerrainDelivery
         }
     }
 
-    private void detach(Player player) {
-        State s = states.remove(player.getUniqueId());
+    private void retryMissingColumn(Player player, State s, Plan plan) {
+        synchronized (s) {
+            if (s.epoch != plan.epoch || s.columns.get(plan.key) != plan.column) {
+                return;
+            }
 
-        if (s == null) return;
+            plan.column.inFlight = false;
+
+            if (plan.restore) {
+                s.columns.remove(plan.key);
+                return;
+            }
+
+            if (plan.column.retryScheduled) {
+                return;
+            }
+            plan.column.retryScheduled = true;
+        }
+
+        UUID playerId = player.getUniqueId();
+
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            synchronized (s) {
+                if (states.get(playerId) != s
+                    || s.epoch != plan.epoch
+                    || s.columns.get(plan.key) != plan.column) {
+                    return;
+                }
+
+                plan.column.retryScheduled = false;
+                enqueue(s, plan.key, plan.column);
+            }
+        }, 2L);
+    }
+
+    private void detach(Player player) {
+        UUID playerId = player.getUniqueId();
+        State s = states.get(playerId);
+        if (s == null) {
+            return;
+        }
+
+        Channel channel = ((CraftPlayer) player)
+            .getHandle().connection.connection.channel;
+
+        if (s.channel != channel || !states.remove(playerId, s)) {
+            return;
+        }
 
         synchronized (s) {
             s.epoch++;
@@ -1146,6 +1202,7 @@ public final class CaveVisTerrainDelivery
         boolean near;
         boolean sent;
         boolean restoreOnly;
+        boolean retryScheduled;
 
         BitSet wanted;
         BitSet delivered = new BitSet();

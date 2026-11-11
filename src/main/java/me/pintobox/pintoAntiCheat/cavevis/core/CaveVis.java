@@ -1,5 +1,6 @@
 package me.pintobox.pintoAntiCheat.cavevis.core;
 
+import me.pintobox.pintoAntiCheat.cavevis.api.CaveVisApi;
 import me.pintobox.pintoAntiCheat.cavevis.cache.CaveVisRayCache;
 import me.pintobox.pintoAntiCheat.cavevis.delivery.CaveVisEntityVisibility;
 import me.pintobox.pintoAntiCheat.cavevis.delivery.CaveVisTerrainDelivery;
@@ -7,6 +8,7 @@ import me.pintobox.pintoAntiCheat.cavevis.profiling.CaveVisMainProfiler;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.World;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.entity.Player;
@@ -18,6 +20,7 @@ import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 
@@ -25,7 +28,7 @@ import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-public final class CaveVis implements Listener, AutoCloseable {
+public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
     private final JavaPlugin plugin;
     private final Map<UUID, Session> sessions = new HashMap<>();
     private final Set<UUID> pendingScans = new LinkedHashSet<>();
@@ -62,11 +65,17 @@ public final class CaveVis implements Listener, AutoCloseable {
             plugin, this::tick, 1L, 1L
         );
 
+        Bukkit.getServicesManager().register(
+            CaveVisApi.class, this, plugin, ServicePriority.Normal
+        );
+
         plugin.getLogger().info("Cave visibility initialized.");
     }
 
     @Override
     public void close() {
+        Bukkit.getServicesManager().unregister(CaveVisApi.class, this);
+
         if (tickTask != null) {
             tickTask.cancel();
             tickTask = null;
@@ -82,7 +91,60 @@ public final class CaveVis implements Listener, AutoCloseable {
 
         if (entities != null) entities.close();
         if (terrain != null) terrain.close();
-        if (cache != null) cache.close();
+
+        CaveVisRayCache closingCache = cache;
+        cache = null;
+
+        if (closingCache != null) {
+            closingCache.close();
+        }
+    }
+
+    @Override
+    public CompletableFuture<Void> preload(
+        World world,
+        int centerChunkX,
+        int centerChunkZ,
+        int radiusChunks
+    ) {
+        if (!Bukkit.isPrimaryThread()) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException("Call CaveVis.preload on the server thread")
+            );
+        }
+
+        if (cache == null) {
+            return CompletableFuture.failedFuture(
+                new IllegalStateException("CaveVis is not running")
+            );
+        }
+
+        if (world == null || Bukkit.getWorld(world.getUID()) != world) {
+            return CompletableFuture.failedFuture(
+                new IllegalArgumentException("The preload world must be loaded")
+            );
+        }
+
+        try {
+            return cache.start(null, world, centerChunkX, centerChunkZ, radiusChunks);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return CompletableFuture.failedFuture(e);
+        }
+    }
+
+    @Override
+    public void releasePreloaded(UUID worldId) {
+        if (!Bukkit.isPrimaryThread()) {
+            throw new IllegalStateException(
+                "Call CaveVis.releasePreloaded on the server thread"
+            );
+        }
+
+        if (cache == null) {
+            throw new IllegalStateException("CaveVis is not running");
+        }
+
+        cache.releasePreloaded(Objects.requireNonNull(worldId, "worldId"));
     }
 
     void build(CommandSender sender, Player player, int radius) {
@@ -252,8 +314,9 @@ public final class CaveVis implements Listener, AutoCloseable {
                     try {
                         CaveVisRayCache.Scan scan = s.future.join();
 
-                        if (scan.generation() == cache.generation()
-                            && cache.ready(player.getEyeLocation())) {
+                        if (!cache.isCurrent(scan)) {
+                            s.force = true;
+                        } else if (cache.ready(player.getEyeLocation())) {
                             s.failures = 0;
                             s.retryAtTick = 0;
 

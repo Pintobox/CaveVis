@@ -378,16 +378,13 @@ public final class CaveVisRaycast {
         );
     }
 
-    private static int startVoxel(
-        double coordinate,
-        boolean positive
-    ) {
-        return (int) Math.floor(Math.nextAfter(
-            coordinate,
-            positive
-                ? Double.POSITIVE_INFINITY
-                : Double.NEGATIVE_INFINITY
-        ) / 2);
+    private static int startVoxel(double coordinate, boolean positive) {
+        double cellCoordinate = coordinate / 2.0;
+        double direction = positive
+            ? Double.POSITIVE_INFINITY
+            : Double.NEGATIVE_INFINITY;
+
+        return (int) Math.floor(Math.nextAfter(cellCoordinate, direction));
     }
 
     private static void check(AtomicBoolean cancelled) {
