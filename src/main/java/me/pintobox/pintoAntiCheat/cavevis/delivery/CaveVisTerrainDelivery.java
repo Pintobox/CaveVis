@@ -539,12 +539,7 @@ public final class CaveVisTerrainDelivery
                 return;
             }
 
-            s.visible = new CaveVisVisibility(
-                s.world,
-                scan.grid(),
-                scan.run().result().sections()
-            );
-
+            s.visible = scan.visibility();
             s.accepted = version;
 
             int bottom = Math.floorDiv(

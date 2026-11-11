@@ -1,5 +1,6 @@
 package me.pintobox.pintoAntiCheat.cavevis.cache;
 
+import me.pintobox.pintoAntiCheat.cavevis.delivery.CaveVisVisibility;
 import me.pintobox.pintoAntiCheat.cavevis.profiling.CaveVisPrepProfiler;
 import me.pintobox.pintoAntiCheat.cavevis.core.CaveVisSettings;
 import me.pintobox.pintoAntiCheat.cavevis.visibility.CaveVisRayData;
@@ -50,7 +51,12 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
     private long sequence;
     private CaveVisRaycast.Directions directions;
 
-    public record Scan(long generation, CaveVisRayData.Grid grid, CaveVisRaycast.Run run) {}
+    public record Scan(
+        long generation,
+        CaveVisRayData.Grid grid,
+        CaveVisRaycast.Run run,
+        CaveVisVisibility visibility
+    ) {}
 
     private record Loaded(int index, Chunk chunk, boolean ticket) {}
 
@@ -178,20 +184,33 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
 
             stageStarted = prepProfiler.stageStart();
 
+            UUID worldId = c.world.getUID();
+
             CompletableFuture<Scan> future =
                 CompletableFuture.supplyAsync(
-                    () -> new Scan(
-                        c.id,
-                        grid,
-                        CaveVisRaycast.search(
+                    () -> {
+                        CaveVisRaycast.Run run = CaveVisRaycast.search(
                             snapshot,
                             ex, ey, ez,
                             radius,
                             selected,
                             seed,
                             cancelled
-                        )
-                    ),
+                        );
+
+                        CaveVisVisibility visibility = new CaveVisVisibility(
+                            worldId,
+                            grid,
+                            run.result().sections()
+                        );
+
+                        return new Scan(
+                            c.id,
+                            grid,
+                            run,
+                            visibility
+                        );
+                    },
                     rays
                 );
 

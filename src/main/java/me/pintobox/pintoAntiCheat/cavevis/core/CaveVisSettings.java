@@ -30,6 +30,7 @@ public final class CaveVisSettings {
 
     public static final int NEAR_REVEAL_RADIUS_BLOCKS = 8;
     public static final boolean NEAR_SEND_IMMEDIATELY = false;
+    public static final boolean VISIBILITY_MARGIN_ENABLED = true;
 
     public static final long BUILD_BUDGET_NANOS = nanos(BUILD_BUDGET_MS);
     public static final long EDIT_BUDGET_NANOS = nanos(EDIT_BUDGET_MS);

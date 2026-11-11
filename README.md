@@ -85,6 +85,7 @@ of a hidden cave.
 | `COLUMN_SEND_BUDGET_MS` | 3.0 | Target server-thread time per tick for normal column delivery. |
 | `NEAR_REVEAL_RADIUS_BLOCKS` | 8 | Distance around the player's eyes used to prioritize nearby sections. Whole sections are revealed. |
 | `NEAR_SEND_IMMEDIATELY` | `false` | Lets nearby deliveries bypass the normal column limits and time budget. |
+| `VISIBILITY_MARGIN_ENABLED` | `true` | Adds a one-section margin in the six face directions to reduce terrain pop-in around corners. Set to `false` to use the original raycast mask. |
 
 Time budgets are targets checked between work items. `BUILD_BUDGET_NANOS`
 and `EDIT_BUDGET_NANOS` are calculated from the millisecond settings.
