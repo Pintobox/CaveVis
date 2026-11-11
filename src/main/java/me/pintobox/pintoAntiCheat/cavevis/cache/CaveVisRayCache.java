@@ -1,5 +1,6 @@
 package me.pintobox.pintoAntiCheat.cavevis.cache;
 
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import me.pintobox.pintoAntiCheat.cavevis.delivery.CaveVisVisibility;
 import me.pintobox.pintoAntiCheat.cavevis.profiling.CaveVisPrepProfiler;
 import me.pintobox.pintoAntiCheat.cavevis.core.CaveVisSettings;
@@ -22,6 +23,8 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
 import org.bukkit.event.world.ChunkLoadEvent;
+import org.bukkit.event.world.ChunkUnloadEvent;
+import org.bukkit.event.world.WorldUnloadEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.*;
@@ -36,18 +39,20 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
     public static final int MAX_SEARCH_RADIUS_CHUNKS = 64;
     private static final int MAX_BUILD_RADIUS_CHUNKS = 64;
     private static final long MAX_RAW_SNAPSHOT_BYTES = 256L * 1024 * 1024;
+    private static final long AUTOMATIC_CAPTURE_BUDGET_NANOS = 1_000_000L;
 
     private final JavaPlugin plugin;
     private final ExecutorService rays = Executors.newFixedThreadPool(CaveVisSettings.RAY_WORKERS);
     private final CaveVisStorageChanges changes = new CaveVisStorageChanges();
     private final long[] dirtyCells = new long[8];
-    private final Map<Integer, long[]> liveCopies = new HashMap<>();
+    private final Map<UUID, WorldCache> worlds = new HashMap<>();
+    private final Map<LiveColumn, long[]> liveCopies = new IdentityHashMap<>();
     private final Set<Integer> rawCopied = new HashSet<>();
     private final CaveVisPrepProfiler prepProfiler = new CaveVisPrepProfiler();
+    private final CaveVisCaptureQueue captures = new CaveVisCaptureQueue();
 
-    private Cache cache;
     private Build build;
-    private long serial;
+    private long generation = -1;
     private long sequence;
     private CaveVisRaycast.Directions directions;
 
@@ -65,6 +70,12 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
         setRays(CaveVisSettings.DEFAULT_RAYS);
 
         Bukkit.getPluginManager().registerEvents(this, plugin);
+
+        for (World world : Bukkit.getWorlds()) {
+            for (Chunk chunk : world.getLoadedChunks()) {
+                captures.add(world.getUID(), chunk.getX(), chunk.getZ());
+            }
+        }
     }
 
     public CaveVisPrepProfiler preparationProfile() {
@@ -90,17 +101,36 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
     }
 
     public long generation() {
-        return cache == null ? -1 : cache.id;
+        return generation;
     }
 
     public boolean ready(Location eye) {
-        return cache != null
-            && cache.world.equals(eye.getWorld())
-            && eye.getY() >= cache.bottom * 16
-            && cache.column(
+        World world = eye.getWorld();
+        if (world == null) {
+            return false;
+        }
+
+        LiveColumn column = liveColumn(
+            world,
             eye.getBlockX() >> 4,
+            eye.getBlockY() >> 4,
             eye.getBlockZ() >> 4
-        ) >= 0;
+        );
+
+        if (column != null) {
+            return column.ready;
+        }
+
+        // An eye above the occluder cutoff can still scan downward.
+        WorldCache cached = worlds.get(world.getUID());
+        if (cached == null || eye.getY() < cached.bottom * 16) {
+            return false;
+        }
+
+        column = cached.columns.get(columnKey(
+            eye.getBlockX() >> 4, eye.getBlockZ() >> 4
+        ));
+        return column != null && column.ready;
     }
 
     public CompletableFuture<Scan> search(
@@ -130,42 +160,26 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
         long preparationStarted = prepProfiler.begin();
 
         try {
-            Cache c = cache;
-            int width = Math.min(c.diameter, radius * 2 + 1);
-
-            int x = Math.max(
-                c.minX,
-                Math.min(
-                    (eye.getBlockX() >> 4) - radius,
-                    c.minX + c.diameter - width
-                )
-            );
-
-            int z = Math.max(
-                c.minZ,
-                Math.min(
-                    (eye.getBlockZ() >> 4) - radius,
-                    c.minZ + c.diameter - width
-                )
-            );
+            UUID worldId = eye.getWorld().getUID();
+            WorldCache cached = worlds.get(worldId);
+            long scanGeneration = generation;
+            int width = radius * 2 + 1;
+            int x = (eye.getBlockX() >> 4) - radius;
+            int z = (eye.getBlockZ() >> 4) - radius;
 
             long stageStarted = prepProfiler.stageStart();
-
             CaveVisRayData.Grid grid = new CaveVisRayData.Grid(
-                x, z, width, c.bottom, c.height
+                x, z, width, cached.bottom, cached.height
             );
 
             long[][] columns = new long[width * width][];
-            int firstColumn = c.column(x, z);
-
             for (int dz = 0; dz < width; dz++) {
-                System.arraycopy(
-                    c.columns,
-                    firstColumn + dz * c.diameter,
-                    columns,
-                    dz * width,
-                    width
-                );
+                for (int dx = 0; dx < width; dx++) {
+                    LiveColumn column = cached.columns.get(columnKey(x + dx, z + dz));
+                    if (column != null && column.ready) {
+                        columns[dz * width + dx] = column.mask;
+                    }
+                }
             }
 
             var snapshot = new CaveVisRaycast.Snapshot(grid, columns);
@@ -183,8 +197,6 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
             );
 
             stageStarted = prepProfiler.stageStart();
-
-            UUID worldId = c.world.getUID();
 
             CompletableFuture<Scan> future =
                 CompletableFuture.supplyAsync(
@@ -205,7 +217,7 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
                         );
 
                         return new Scan(
-                            c.id,
+                            scanGeneration,
                             grid,
                             run,
                             visibility
@@ -276,14 +288,13 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
             );
         }
 
-        Cache next = new Cache(
+        BuildArea next = new BuildArea(
             world,
             (center.getBlockX() >> 4) - radius,
             (center.getBlockZ() >> 4) - radius,
             diameter,
             bottom,
-            height,
-            ++serial
+            height
         );
 
         build = new Build(source, next);
@@ -295,6 +306,8 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
     }
 
     public void tick() {
+        captures.drain(AUTOMATIC_CAPTURE_BUDGET_NANOS, this::captureLoadedColumn);
+
         flushEdits();
 
         Build b = build;
@@ -432,94 +445,117 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
         );
     }
 
-    public record Bounds(
-        UUID world,
-        int minX,
-        int minZ,
-        int diameter,
-        int bottom,
-        int height
-    ) {
-        public boolean contains(int x, int z) {
-            return x >= minX
-                && z >= minZ
-                && x - minX < diameter
-                && z - minZ < diameter;
-        }
+    private long[] capture(Chunk chunk, BuildArea area) {
+        ChunkAccess handle =
+            ((CraftChunk) chunk).getHandle(ChunkStatus.FULL);
 
-        public int top() {
-            return bottom + height;
-        }
-    }
-
-    public Bounds bounds() {
-        Cache c = cache;
-
-        if (c == null) {
-            throw new IllegalStateException(
-                "Build a ray cache first"
-            );
-        }
-
-        return new Bounds(
-            c.world.getUID(),
-            c.minX,
-            c.minZ,
-            c.diameter,
-            c.bottom,
-            c.height
+        return capture(
+            handle,
+            area.world,
+            chunk.getX(),
+            chunk.getZ(),
+            area.bottom,
+            area.height,
+            false
         );
     }
 
-    private long[] capture(Chunk chunk, Cache c) {
+    private long[] capture(
+        ChunkAccess handle,
+        World world,
+        int chunkX,
+        int chunkZ,
+        int bottom,
+        int height,
+        boolean drainBeforeCapture
+    ) {
         if (!Bukkit.isPrimaryThread()) {
             throw new IllegalStateException(
                 "Terrain capture must run on the server thread"
             );
         }
 
-        ChunkAccess handle =
-            ((CraftChunk) chunk).getHandle(ChunkStatus.FULL);
-
         LevelChunkSection[] sections = handle.getSections();
+        int first = bottom - Math.floorDiv(world.getMinHeight(), 16);
+        long[] bits = new long[height * 64];
 
-        int worldBottomSection =
-            Math.floorDiv(c.world.getMinHeight(), 16);
-
-        long[] bits = new long[c.height * 64];
-
-        for (int s = 0; s < c.height; s++) {
-            int sectionIndex = c.bottom + s - worldBottomSection;
-
-            LevelChunkSection section = sections[sectionIndex];
-            if (section != null) {
-                changes.bind(c.world, chunk.getX(), c.bottom + s, chunk.getZ(), section);
+        for (int s = 0; s < height; s++) {
+            LevelChunkSection section = sections[first + s];
+            if (section == null) {
+                continue;
             }
 
-            if (section == null || section.hasOnlyAir()) {
+            var watch = changes.bind(world, chunkX, bottom + s, chunkZ, section);
+            if (drainBeforeCapture) {
+                // This capture reads the whole section immediately.
+                watch.drain(dirtyCells);
+            }
+
+            if (section.hasOnlyAir()) {
                 continue;
             }
 
             int sectionWord = s * 64;
-
             for (int y = 0; y < 16; y++) {
                 for (int z = 0; z < 16; z++) {
                     for (int x = 0; x < 16; x++) {
-                        if (!section.getBlockState(x, y, z)
-                            .isSolidRender()) {
-                            continue;
+                        if (section.getBlockState(x, y, z).isSolidRender()) {
+                            int cell = x | (z << 4) | (y << 8);
+                            bits[sectionWord + (cell >>> 6)] |= 1L << (cell & 63);
                         }
-
-                        int cell = x | (z << 4) | (y << 8);
-
-                        bits[sectionWord + (cell >>> 6)]
-                            |= 1L << (cell & 63);
                     }
                 }
             }
         }
 
         return bits;
+    }
+
+    private void captureLoadedColumn(CaveVisCaptureQueue.Column request) {
+        World world = Bukkit.getWorld(request.worldId());
+        if (world == null) {
+            return;
+        }
+
+        int x = request.x();
+        int z = request.z();
+        LevelChunk chunk = loaded(world, x, z);
+        if (chunk == null) {
+            return;
+        }
+
+        int bottom = Math.floorDiv(world.getMinHeight(), 16);
+        int top = Math.min(
+            Math.floorDiv(world.getMaxHeight(), 16),
+            Math.floorDiv(CaveVisSettings.OCCLUDERS_UP_TO_Y + 15, 16)
+        );
+        int height = top - bottom;
+        if (height <= 0) {
+            return;
+        }
+
+        WorldCache cached = worlds.computeIfAbsent(
+            request.worldId(), unused -> new WorldCache(bottom, height)
+        );
+
+        long key = columnKey(x, z);
+        LiveColumn previous = cached.columns.get(key);
+        if (previous != null && previous.ready) {
+            return;
+        }
+
+        Build activeBuild = build;
+        int buildIndex = activeBuild != null && activeBuild.data.world.equals(world)
+            ? activeBuild.data.column(x, z)
+            : -1;
+
+        // A preload that already captured this column still needs its edit notifications.
+        boolean staged = buildIndex >= 0 && activeBuild.raw[buildIndex] != null;
+        long[] raw = capture(chunk, world, x, z, bottom, height, !staged);
+
+        LiveColumn current = new LiveColumn(CaveVisRayPacking.column(raw, height));
+        current.retained = previous != null && previous.retained;
+        cached.columns.put(key, current);
     }
 
     private void finish(Build b) {
@@ -570,7 +606,22 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
 
         if (!b.dirty.isEmpty()) return;
 
-        cache = b.data;
+        BuildArea area = b.data;
+        WorldCache cached = worlds.computeIfAbsent(
+            area.world.getUID(),
+            unused -> new WorldCache(area.bottom, area.height)
+        );
+
+        for (int index = 0; index < area.columns.length; index++) {
+            int x = area.minX + index % area.diameter;
+            int z = area.minZ + index / area.diameter;
+            LiveColumn column = new LiveColumn(area.columns[index]);
+            column.retained = true;
+            cached.columns.put(columnKey(x, z), column);
+            captures.remove(area.world.getUID(), x, z);
+        }
+
+        generation++;
         build = null;
         retainWatches();
 
@@ -597,7 +648,7 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
         LevelChunk chunk = loaded(block.getWorld(), block.getX() >> 4, block.getZ() >> 4);
         if (chunk == null) return;
         int y = block.getY();
-        if (!relevant(cache, block.getWorld(), block.getX(), y, block.getZ())
+        if (liveColumn(block.getWorld(), block.getX() >> 4, y >> 4, block.getZ() >> 4) == null
             && (build == null || !relevant(build.data, block.getWorld(), block.getX(), y, block.getZ()))) return;
         var section = chunk.getSection(chunk.getSectionIndex(y));
         if (section == null) return;
@@ -605,17 +656,30 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
         watch.accept((block.getX() & 15) | ((block.getZ() & 15) << 4) | ((y & 15) << 8));
     }
 
-    private static boolean relevant(Cache c, World world, int x, int y, int z) {
+    private static boolean relevant(BuildArea c, World world, int x, int y, int z) {
         return c != null && c.world.equals(world)
             && y >= c.bottom * 16 && y < (c.bottom + c.height) * 16
             && c.column(x >> 4, z >> 4) >= 0;
+    }
+
+    private LiveColumn liveColumn(World world, int x, int y, int z) {
+        WorldCache cached = worlds.get(world.getUID());
+        if (cached == null || y < cached.bottom || y >= cached.bottom + cached.height) {
+            return null;
+        }
+
+        return cached.columns.get(columnKey(x, z));
+    }
+
+    private static long columnKey(int x, int z) {
+        return (x & 0xffffffffL) | ((long) z << 32);
     }
 
     private static LevelChunk loaded(World world, int x, int z) {
         return ((CraftWorld) world).getHandle().getChunkSource().getChunkAtIfLoadedImmediately(x, z);
     }
 
-    private void refreshColumn(Cache c, LevelChunk chunk) {
+    private void refreshColumn(BuildArea c, LevelChunk chunk) {
         int x = chunk.getPos().x;
         int z = chunk.getPos().z;
 
@@ -676,14 +740,9 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
                 && (watch = changes.poll()) != null) {
 
                 processed = true;
+                if (!watch.hasPending()) continue;
 
-                boolean inLive = relevant(
-                    cache,
-                    watch.world,
-                    watch.x << 4,
-                    watch.y << 4,
-                    watch.z << 4
-                );
+                boolean inLive = liveColumn(watch.world, watch.x, watch.y, watch.z) != null;
 
                 boolean inBuild = build != null && relevant(
                     build.data,
@@ -738,16 +797,15 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
         LevelChunkSection section
     ) {
         if (!watch.drain(dirtyCells)) return;
-        Cache live = cache;
+        WorldCache live = worlds.get(watch.world.getUID());
+        LiveColumn column = liveColumn(watch.world, watch.x, watch.y, watch.z);
         Build b = build;
-        boolean inLive = relevant(live, watch.world, watch.x << 4, watch.y << 4, watch.z << 4);
         boolean inBuild = b != null && relevant(b.data, watch.world,
             watch.x << 4, watch.y << 4, watch.z << 4);
-        if (!inLive && !inBuild) return;
+        if (column == null && !inBuild) return;
 
-        int liveColumn = inLive ? live.column(watch.x, watch.z) : -1;
-        int liveSection = inLive ? watch.y - live.bottom : -1;
-        long[] packed = inLive ? liveCopies.getOrDefault(liveColumn, live.columns[liveColumn]) : null;
+        int liveSection = column == null ? -1 : watch.y - live.bottom;
+        long[] packed = column == null ? null : liveCopies.getOrDefault(column, column.mask);
         int rawColumn = inBuild ? b.data.column(watch.x, watch.z) : -1;
         int rawSection = inBuild ? watch.y - b.data.bottom : -1;
         long[] raw = inBuild ? b.raw[rawColumn] : null;
@@ -794,9 +852,9 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
                 int word = liveSection * 8 + row;
                 long bit = 1L << offset;
                 if (((packed[word] & bit) != 0) == solid) continue;
-                if (!liveCopies.containsKey(liveColumn)) {
+                if (!liveCopies.containsKey(column)) {
                     packed = packed.clone();
-                    liveCopies.put(liveColumn, packed);
+                    liveCopies.put(column, packed);
                 }
                 if (solid) packed[word] |= bit;
                 else packed[word] &= ~bit;
@@ -809,15 +867,15 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
     }
 
     private void publishChanges() {
-        if (cache != null) {
-            for (var entry : liveCopies.entrySet()) cache.columns[entry.getKey()] = entry.getValue();
+        for (var entry : liveCopies.entrySet()) {
+            entry.getKey().mask = entry.getValue();
         }
         liveCopies.clear();
         rawCopied.clear();
     }
 
     private void retainWatches() {
-        changes.retain(watch -> relevant(cache, watch.world, watch.x << 4, watch.y << 4, watch.z << 4)
+        changes.retain(watch -> liveColumn(watch.world, watch.x, watch.y, watch.z) != null
             || (build != null && relevant(build.data, watch.world,
             watch.x << 4, watch.y << 4, watch.z << 4)));
     }
@@ -833,10 +891,21 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
                 + " packed.";
         }
 
-        return cache == null
-            ? "No cache."
-            : "Cache ready: " + cache.columns.length
-            + " columns in " + cache.world.getName();
+        int ordinary = 0;
+        int retained = 0;
+
+        for (WorldCache cached : worlds.values()) {
+            for (LiveColumn column : cached.columns.values()) {
+                if (column.retained) {
+                    retained++;
+                } else {
+                    ordinary++;
+                }
+            }
+        }
+
+        return "Opacity cache: " + ordinary + " automatic, "
+            + retained + " preloaded columns.";
     }
 
     public void cancel() {
@@ -860,15 +929,48 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
 
     public void clear() {
         cancel();
-        cache = null;
-        changes.close();
+
+        var iterator = worlds.entrySet().iterator();
+        while (iterator.hasNext()) {
+            var entry = iterator.next();
+            World world = Bukkit.getWorld(entry.getKey());
+            WorldCache cached = entry.getValue();
+            var columns = cached.columns.long2ObjectEntrySet().iterator();
+
+            while (columns.hasNext()) {
+                var columnEntry = columns.next();
+                LiveColumn column = columnEntry.getValue();
+                if (!column.retained) {
+                    continue;
+                }
+
+                column.retained = false;
+                long key = columnEntry.getLongKey();
+                int x = (int) key;
+                int z = (int) (key >>> 32);
+
+                if (world == null || loaded(world, x, z) == null) {
+                    columns.remove();
+                }
+            }
+
+            if (cached.columns.isEmpty()) {
+                iterator.remove();
+            }
+        }
+
+        generation++;
+        retainWatches();
     }
 
     @Override
     public void close() {
         HandlerList.unregisterAll(this);
 
-        clear();
+        cancel();
+        captures.clear();
+        worlds.clear();
+        changes.close();
         rays.shutdownNow();
         liveCopies.clear();
         rawCopied.clear();
@@ -879,28 +981,124 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
         World world = event.getWorld();
         int x = event.getChunk().getX();
         int z = event.getChunk().getZ();
+        UUID worldId = world.getUID();
 
-        Cache live = cache;
+        WorldCache cached = worlds.get(worldId);
+        if (cached != null) {
+            LiveColumn column = cached.columns.get(columnKey(x, z));
+            if (column != null) {
+                column.ready = false;
+            }
+        }
+
+        captures.add(worldId, x, z);
+
         Build activeBuild = build;
+        if (activeBuild == null || !activeBuild.data.world.equals(world)) {
+            return;
+        }
 
-        boolean inLive = live != null
-            && live.world.equals(world)
-            && live.column(x, z) >= 0;
-
-        boolean inBuild = activeBuild != null
-            && activeBuild.data.world.equals(world)
-            && activeBuild.data.column(x, z) >= 0;
-
-        if (!inLive && !inBuild) return;
+        int index = activeBuild.data.column(x, z);
+        if (index < 0 || activeBuild.raw[index] == null) {
+            return;
+        }
 
         LevelChunk chunk = (LevelChunk) ((CraftChunk) event.getChunk())
             .getHandle(ChunkStatus.FULL);
 
         try {
-            if (inLive) refreshColumn(live, chunk);
-            if (inBuild) refreshColumn(activeBuild.data, chunk);
+            refreshColumn(activeBuild.data, chunk);
         } finally {
             publishChanges();
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onChunkUnload(ChunkUnloadEvent event) {
+        World world = event.getWorld();
+        int x = event.getChunk().getX();
+        int z = event.getChunk().getZ();
+
+        captures.remove(world.getUID(), x, z);
+
+        WorldCache cached = worlds.get(world.getUID());
+        Build activeBuild = build;
+        int buildIndex = activeBuild != null && activeBuild.data.world.equals(world)
+            ? activeBuild.data.column(x, z)
+            : -1;
+
+        if (cached != null && cached.columns.containsKey(columnKey(x, z))) {
+            try {
+                // Capture edits that arrived after the tick's edit queue was drained.
+                LevelChunk chunk = loaded(world, x, z);
+                if (chunk != null) {
+                    refreshRetainedColumn(world, x, z, cached, chunk);
+                }
+            } finally {
+                publishChanges();
+                changes.unbindColumn(world, x, z, cached.bottom, cached.height);
+            }
+        } else if (buildIndex >= 0) {
+            BuildArea area = activeBuild.data;
+            try {
+                if (activeBuild.raw[buildIndex] != null) {
+                    LevelChunk chunk = loaded(world, x, z);
+                    if (chunk != null) {
+                        refreshColumn(area, chunk);
+                    }
+                }
+            } finally {
+                publishChanges();
+                changes.unbindColumn(world, x, z, area.bottom, area.height);
+            }
+        }
+
+        if (buildIndex >= 0) {
+            activeBuild.data.observed[buildIndex] = null;
+        }
+
+        if (cached != null) {
+            long key = columnKey(x, z);
+            LiveColumn column = cached.columns.get(key);
+            if (column != null && !column.retained) {
+                cached.columns.remove(key);
+            }
+
+            if (cached.columns.isEmpty()) {
+                worlds.remove(world.getUID());
+            }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onWorldUnload(WorldUnloadEvent event) {
+        World world = event.getWorld();
+        UUID worldId = world.getUID();
+
+        captures.removeWorld(worldId);
+        if (build != null && build.data.world.equals(world)) {
+            cancel();
+        }
+
+        WorldCache cached = worlds.get(worldId);
+        if (cached != null) {
+            cached.columns.values().removeIf(column -> !column.retained);
+            if (cached.columns.isEmpty()) {
+                worlds.remove(worldId);
+            }
+        }
+
+        changes.retain(watch -> !watch.world.getUID().equals(worldId));
+    }
+
+    private void refreshRetainedColumn(World world, int x, int z, WorldCache cached, LevelChunk chunk) {
+        int first = chunk.getSectionIndex(cached.bottom << 4);
+        var sections = chunk.getSections();
+        for (int i = 0; i < cached.height; i++) {
+            LevelChunkSection section = sections[first + i];
+            if (section != null) {
+                applyWatch(changes.bind(world, x, cached.bottom + i, z, section), section);
+            }
         }
     }
 
@@ -908,21 +1106,40 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
         sender.sendMessage("[CaveVis] " + text);
     }
 
-    private static final class Cache {
+    private static final class WorldCache {
+        final int bottom;
+        final int height;
+        final Long2ObjectOpenHashMap<LiveColumn> columns = new Long2ObjectOpenHashMap<>();
+
+        WorldCache(int bottom, int height) {
+            this.bottom = bottom;
+            this.height = height;
+        }
+    }
+
+    private static final class LiveColumn {
+        long[] mask;
+        boolean ready = true;
+        boolean retained;
+
+        LiveColumn(long[] mask) {
+            this.mask = mask;
+        }
+    }
+
+    private static final class BuildArea {
         final World world;
         final int minX, minZ, diameter, bottom, height;
-        final long id;
         final long[][] columns;
         final CaveVisStorageChanges.Watch[][] observed;
 
-        Cache(
+        BuildArea(
             World world,
             int minX,
             int minZ,
             int diameter,
             int bottom,
-            int height,
-            long id
+            int height
         ) {
             this.world = world;
             this.minX = minX;
@@ -930,7 +1147,6 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
             this.diameter = diameter;
             this.bottom = bottom;
             this.height = height;
-            this.id = id;
 
             columns = new long[diameter * diameter][];
             observed = new CaveVisStorageChanges.Watch[columns.length][];
@@ -949,7 +1165,7 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
 
     private static final class Build {
         final CommandSender source;
-        final Cache data;
+        final BuildArea data;
         final long[][] raw;
         final ArrayDeque<Loaded> ready = new ArrayDeque<>();
         final BitSet dirty = new BitSet();
@@ -966,7 +1182,7 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
         CompletableFuture<CaveVisRayPacking.Packed> future;
         CaveVisRayPacking.Packed result;
 
-        Build(CommandSender source, Cache data) {
+        Build(CommandSender source, BuildArea data) {
             this.source = source;
             this.data = data;
             raw = new long[data.columns.length][];

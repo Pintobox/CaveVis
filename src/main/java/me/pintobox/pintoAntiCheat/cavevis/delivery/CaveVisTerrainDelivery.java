@@ -4,19 +4,20 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
-import me.pintobox.pintoAntiCheat.cavevis.core.CaveVisSettings;
+import io.papermc.paper.cavevis.CaveVisJoinHook;
 import me.pintobox.pintoAntiCheat.cavevis.cache.CaveVisRayCache;
+import me.pintobox.pintoAntiCheat.cavevis.core.CaveVisSettings;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.*;
+import net.minecraft.server.level.ServerPlayer;
 import org.bukkit.Bukkit;
 import org.bukkit.craftbukkit.entity.CraftPlayer;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
-import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -25,6 +26,7 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
 import java.util.logging.Level;
 
 public final class CaveVisTerrainDelivery
@@ -51,6 +53,9 @@ public final class CaveVisTerrainDelivery
 
     private final JavaPlugin plugin;
 
+    private final Consumer<ServerPlayer> joinHook =
+        player -> attach(player.getBukkitEntity());
+
     private final Map<UUID, State> states =
         new ConcurrentHashMap<>();
 
@@ -62,16 +67,13 @@ public final class CaveVisTerrainDelivery
     public CaveVisTerrainDelivery(JavaPlugin plugin) {
         this.plugin = plugin;
 
+        CaveVisJoinHook.register(joinHook);
+
         Bukkit.getPluginManager().registerEvents(this, plugin);
 
         for (Player player : Bukkit.getOnlinePlayers()) {
             attach(player);
         }
-    }
-
-    @EventHandler
-    public void join(PlayerJoinEvent event) {
-        attach(event.getPlayer());
     }
 
     @EventHandler
@@ -108,6 +110,11 @@ public final class CaveVisTerrainDelivery
         State s = new State(
             player.getWorld().getUID(), channel
         );
+
+        s.enabled = true;
+        s.active = true;
+        s.worldTop = Math.floorDiv(player.getWorld().getMaxHeight(), 16);
+        s.worldBottom = Math.floorDiv(player.getWorld().getMinHeight(), 16);
 
         if (states.putIfAbsent(player.getUniqueId(), s) != null) {
             return;
@@ -344,9 +351,7 @@ public final class CaveVisTerrainDelivery
                 return false;
             }
 
-            if ((!s.active && !s.resetPending)
-                || s.bounds == null
-                || !s.bounds.contains(chunk.getX(), chunk.getZ())) {
+            if (!s.active && !s.resetPending) {
                 return false;
             }
 
@@ -368,127 +373,20 @@ public final class CaveVisTerrainDelivery
         }
     }
 
-    public void enable(
-        Player player,
-        CaveVisRayCache.Bounds bounds
-    ) {
-        attach(player);
-
-        State s = states.get(player.getUniqueId());
-
-        int centerX = player.getLocation().getBlockX() >> 4;
-        int centerZ = player.getLocation().getBlockZ() >> 4;
-
-        Set<Long> keys = new LinkedHashSet<>(
-            player.getSentChunkKeys()
-        );
-
-        var existing = new ArrayList<>(keys);
-
-        existing.sort(Comparator.comparingLong(key -> {
-            long dx = (int) (long) key - centerX;
-            long dz = (int) (key >> 32) - centerZ;
-            return dx * dx + dz * dz;
-        }));
-
-        synchronized (s) {
-            // Include intercepted requests that arrived after respawn.
-            if (s.resetPending
-                || s.world.equals(player.getWorld().getUID())) {
-                for (long key : s.columns.keySet()) {
-                    if (keys.add(key)) {
-                        existing.add(key);
-                    }
-                }
-            }
-
-            s.epoch++;
-            s.deliveryRevision++;
-
-            s.world = player.getWorld().getUID();
-            s.worldTop = Math.floorDiv(
-                player.getWorld().getMaxHeight(), 16
-            );
-
-            s.bounds = bounds;
-            s.enabled = true;
-            s.resetPending = false;
-            s.active = true;
-            s.visible = null;
-            s.accepted = -1;
-
-            s.columns.clear();
-            s.queue.clear();
-            s.urgent.clear();
-
-            s.nearBox = null;
-            s.nearDirty = true;
-
-            long version = ++s.requested;
-
-            for (long key : existing) {
-                if (!bounds.contains(
-                    (int) key, (int) (key >> 32)
-                )) {
-                    continue;
-                }
-
-                Column c = new Column();
-                c.required = version;
-
-                s.columns.put(key, c);
-                enqueue(s, key, c);
-            }
-        }
-    }
-
-    public boolean resumeAfterReset(
-        Player player,
-        CaveVisRayCache.Bounds bounds
-    ) {
+    public boolean resumeAfterReset(Player player) {
         State s = states.get(player.getUniqueId());
         if (s == null) return false;
 
-        UUID world = player.getWorld().getUID();
-
-        if (bounds != null && !bounds.world().equals(world)) {
-            throw new IllegalArgumentException(
-                "Visibility bounds belong to another world"
-            );
-        }
-
         synchronized (s) {
-            if (!s.enabled) return false;
+            if (!s.resetPending) return false;
 
-            boolean sameWorld = s.world.equals(world);
-            boolean reset = s.resetPending || !sameWorld;
+            var world = player.getWorld();
+            s.world = world.getUID();
+            s.worldBottom = Math.floorDiv(world.getMinHeight(), 16);
+            s.worldTop = Math.floorDiv(world.getMaxHeight(), 16);
 
-            if (!reset && (s.active || bounds == null)) {
-                return false;
-            }
-
-            if (bounds != null) {
-                updateCache(player, bounds);
-            } else {
-                // Without a packet reset, these are old-world entries.
-                if (!s.resetPending && !sameWorld) {
-                    s.columns.clear();
-                    s.queue.clear();
-                    s.urgent.clear();
-                }
-
-                s.world = world;
-                s.worldTop = Math.floorDiv(
-                    player.getWorld().getMaxHeight(), 16
-                );
-
-                // Restore held columns normally in an uncached world.
-                disable(player);
-
-                // Resume automatically when a matching cache is available.
-                s.enabled = true;
-            }
-
+            s.active = true;
+            s.resetPending = false;
             return true;
         }
     }
@@ -590,9 +488,8 @@ public final class CaveVisTerrainDelivery
                 }
 
                 s.world = world;
-                s.worldTop = Math.floorDiv(
-                    player.getWorld().getMaxHeight(), 16
-                );
+                s.worldTop = Math.floorDiv(player.getWorld().getMaxHeight(), 16);
+                s.worldBottom = Math.floorDiv(player.getWorld().getMinHeight(), 16);
             }
 
             s.epoch++;
@@ -740,6 +637,7 @@ public final class CaveVisTerrainDelivery
         }
 
         synchronized (s) {
+            if (s.resetPending) return false;
             if (!s.active) {
                 return true;
             }
@@ -779,19 +677,9 @@ public final class CaveVisTerrainDelivery
         int maxZ
     ) {
         if (s.resetPending) return false;
+        if (!s.active) return true;
 
-        if (!s.active || s.bounds == null) {
-            return true;
-        }
-
-        // Terrain outside the built region uses normal vanilla delivery.
-        // Keep entities overlapping that region visible conservatively.
-        if (!s.bounds.contains(minX, minZ)
-            || !s.bounds.contains(maxX, maxZ)) {
-            return true;
-        }
-
-        int bottom = s.bounds.bottom();
+        int bottom = s.worldBottom;
 
         for (int z = minZ; z <= maxZ; z++) {
             for (int x = minX; x <= maxX; x++) {
@@ -954,6 +842,8 @@ public final class CaveVisTerrainDelivery
                 - player.getWorld().getMinHeight()
         ) / 16;
 
+        int bottom = Math.floorDiv(player.getWorld().getMinHeight(), 16);
+
         synchronized (s) {
             if (s.resetPending) return null;
 
@@ -990,26 +880,32 @@ public final class CaveVisTerrainDelivery
                 }
 
                 boolean restore = !s.active || c.restoreOnly;
-
-                if (!restore
-                    && (s.visible == null
-                    || c.required > s.accepted
-                    || c.wanted == null)) {
-                    continue;
-                }
-
                 BitSet wanted;
 
-                if (!restore) {
-                    wanted = (BitSet) c.wanted.clone();
+                if (restore) {
+                    wanted = new BitSet(height);
+                    wanted.set(0, height);
+                } else {
+                    boolean scanReady = s.visible != null
+                        && c.required <= s.accepted
+                        && c.wanted != null;
+
+                    if (scanReady) {
+                        wanted = (BitSet) c.wanted.clone();
+                    } else {
+                        wanted = new BitSet(height);
+                        int surface = Math.clamp(
+                            CaveVisSettings.alwaysVisibleSection() - bottom, 0, height
+                        );
+                        wanted.set(surface, height);
+                        addSafety(s, key, wanted, bottom);
+                    }
+
                     wanted.or(c.delivered);
 
                     if (!c.fresh && wanted.equals(c.delivered)) {
                         continue;
                     }
-                } else {
-                    wanted = new BitSet(height);
-                    wanted.set(0, height);
                 }
 
                 c.inFlight = true;
@@ -1111,6 +1007,7 @@ public final class CaveVisTerrainDelivery
 
     @Override
     public void close() {
+        CaveVisJoinHook.unregister(joinHook);
         HandlerList.unregisterAll(this);
         disableAll();
 
@@ -1145,87 +1042,19 @@ public final class CaveVisTerrainDelivery
         packets.clear();
     }
 
-    public boolean updateCache(
-        Player player,
-        CaveVisRayCache.Bounds bounds
-    ) {
+    public boolean invalidateScan(Player player) {
         State s = states.get(player.getUniqueId());
         if (s == null) return false;
 
         synchronized (s) {
-            if (!s.enabled) return false;
+            if (!s.active || s.resetPending) return false;
 
-            UUID world = player.getWorld().getUID();
-
-            if (bounds == null || !bounds.world().equals(world)) {
-                disable(player);
-
-                // Preserve the user's choice for a matching cache later.
-                s.enabled = true;
-                return true;
-            }
-
-            // Without a packet reset, these entries belong to the old world.
-            if (!s.resetPending && !s.world.equals(world)) {
-                s.columns.clear();
-            }
-
-            for (long key : player.getSentChunkKeys()) {
-                if (bounds.contains(
-                    (int) key,
-                    (int) (key >> 32)
-                )) {
-                    s.columns.computeIfAbsent(
-                        key,
-                        unused -> new Column()
-                    );
-                }
-            }
-
-            // Invalidate pending writes from the previous delivery state.
-            s.epoch++;
-            s.deliveryRevision++;
-
-            s.world = world;
-            s.worldTop = Math.floorDiv(
-                player.getWorld().getMaxHeight(), 16
-            );
-
-            s.bounds = bounds;
-            s.active = true;
-            s.resetPending = false;
             s.visible = null;
             s.accepted = -1;
-
-            s.nearBox = null;
             s.nearDirty = true;
 
-            s.queue.clear();
-            s.urgent.clear();
-
-            long version = ++s.requested;
-
-            for (var entry : s.columns.entrySet()) {
-                long key = entry.getKey();
-                Column c = entry.getValue();
-
-                c.restoreOnly = !bounds.contains(
-                    (int) key,
-                    (int) (key >> 32)
-                );
-
-                c.required = version;
-                c.fresh = true;
-                c.inFlight = false;
-                c.queued = false;
-                c.urgentQueued = false;
-                c.near = false;
-                c.wanted = null;
-                c.writingMask = null;
-
-                // Preserve c.sent and c.delivered.
-                // Already revealed sections must remain revealed.
-                enqueue(s, key, c);
+            for (Column column : s.columns.values()) {
+                column.wanted = null;
             }
 
             return true;
@@ -1276,12 +1105,7 @@ public final class CaveVisTerrainDelivery
         int sectionZ
     ) {
         if (s.resetPending) return false;
-
-        if (!s.active
-            || s.bounds == null
-            || !s.bounds.contains(sectionX, sectionZ)) {
-            return true;
-        }
+        if (!s.active) return true;
 
         Column column = s.columns.get(key(sectionX, sectionZ));
 
@@ -1291,7 +1115,7 @@ public final class CaveVisTerrainDelivery
 
         BitSet writing = column.writingMask;
 
-        int bottom = s.bounds.bottom();
+        int bottom = s.worldBottom;
 
         if (sectionY < bottom || sectionY >= s.worldTop) {
             return column.sent || writing != null;
@@ -1342,8 +1166,8 @@ public final class CaveVisTerrainDelivery
         long accepted = -1;
         long deliveryRevision;
         int worldTop;
+        int worldBottom;
 
-        CaveVisRayCache.Bounds bounds;
         CaveVisVisibility visible;
 
         NearBox nearBox;

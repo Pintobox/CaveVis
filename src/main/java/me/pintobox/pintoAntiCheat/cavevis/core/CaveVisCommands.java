@@ -38,7 +38,7 @@ final class CaveVisCommands implements CommandExecutor, TabCompleter {
                 }
                 case "rayclear" -> {
                     caveVis.clear();
-                    message(sender, "Cache cleared; automatic scans stopped.");
+                    message(sender, "Ray cache cleared; terrain filtering remains active.");
                 }
                 case "raycount" -> {
                     if (args.length != 2) {
@@ -52,17 +52,9 @@ final class CaveVisCommands implements CommandExecutor, TabCompleter {
                     caveVis.setRays(count);
                     message(sender, "Rays per scan: " + count);
                 }
-                case "reveal", "scan" -> {
-                    boolean automatic = caveVis.requestScan(
-                        player(sender), sub.equals("reveal")
-                    );
-                    message(sender, automatic
-                        ? "Automatic visibility enabled; column packets wait for ray results."
-                        : "Ray scan queued.");
-                }
-                case "hide" -> {
-                    caveVis.hide(player(sender));
-                    message(sender, "Filtering stopped; restoring normal columns.");
+                case "scan" -> {
+                    caveVis.requestScan(player(sender));
+                    message(sender, "Ray scan queued.");
                 }
                 case "profile" -> {
                     Player player = player(sender);
@@ -82,7 +74,7 @@ final class CaveVisCommands implements CommandExecutor, TabCompleter {
                 }
                 default -> message(sender,
                     "/cavevis raybuild <radius> | raycancel | rayclear "
-                        + "| raycount <count> | reveal | scan | hide "
+                        + "| raycount <count> | scan "
                         + "| profile [on|off|reset|detail|toggle] | raystats [tick]");
             }
         } catch (IllegalArgumentException | IllegalStateException e) {
@@ -101,8 +93,8 @@ final class CaveVisCommands implements CommandExecutor, TabCompleter {
         List<String> options = args.length == 1
             ? List.of(
             "raybuild", "raycancel", "rayclear",
-            "raycount", "reveal", "scan",
-            "hide", "profile", "raystats"
+            "raycount", "scan",
+            "profile", "raystats"
         )
             : args.length == 2 && args[0].equalsIgnoreCase("profile")
             ? List.of("on", "off", "reset", "detail", "toggle")

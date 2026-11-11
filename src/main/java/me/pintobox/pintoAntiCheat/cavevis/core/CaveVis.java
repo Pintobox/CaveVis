@@ -94,53 +94,34 @@ public final class CaveVis implements Listener, AutoCloseable {
     }
 
     void clear() {
-        terrain.disableAll();
         cache.clear();
         pendingScans.clear();
-
-        for (Session session : sessions.values()) {
-            stopScanning(session);
-        }
     }
 
     void setRays(int count) {
         cache.setRays(count);
     }
 
-    boolean requestScan(Player player, boolean reveal) {
+    void requestScan(Player player) {
         if (!cache.ready(player.getEyeLocation())) {
             throw new IllegalStateException(
                 "Finish /cavevis raybuild around your position first"
             );
         }
 
-        if (reveal) {
-            terrain.enable(player, cache.bounds());
-        }
-
         UUID playerId = player.getUniqueId();
-        Session session = sessions.computeIfAbsent(playerId, id -> new Session(player));
+        Session session = sessions.computeIfAbsent(
+            playerId, id -> new Session(player)
+        );
         cancel(session);
 
-        session.automatic = reveal || terrain.active(player);
+        session.automatic = true;
         session.notice = true;
         session.failures = 0;
         session.retryAtTick = 0;
         session.force = true;
 
         pendingScans.add(playerId);
-        return session.automatic;
-    }
-
-    void hide(Player player) {
-        terrain.disable(player);
-
-        UUID playerId = player.getUniqueId();
-        pendingScans.remove(playerId);
-        Session session = sessions.get(playerId);
-        if (session != null) {
-            stopScanning(session);
-        }
     }
 
     String profile(Player player, String action) {
@@ -250,18 +231,13 @@ public final class CaveVis implements Listener, AutoCloseable {
                     s.failures = 0;
                     s.retryAtTick = 0;
 
-                    if (terrain.updateCache(
-                        player, generation >= 0 ? cache.bounds() : null
-                    )) {
+                    if (terrain.invalidateScan(player)) {
                         s.automatic = true;
                         s.force = true;
                     }
                 }
 
-                if (terrain.resumeAfterReset(
-                    player,
-                    cache.ready(player.getEyeLocation()) ? cache.bounds() : null
-                )) {
+                if (terrain.resumeAfterReset(player)) {
                     cancel(s);
 
                     s.stats = new Stats();
@@ -461,16 +437,6 @@ public final class CaveVis implements Listener, AutoCloseable {
         }
     }
 
-    private static void stopScanning(Session session) {
-        cancel(session);
-
-        session.automatic = false;
-        session.force = false;
-        session.notice = false;
-        session.retryAtTick = 0;
-        session.failures = 0;
-    }
-
     private static void cancel(Session session) {
         if (session.cancelled != null) {
             session.cancelled.set(true);
@@ -489,9 +455,6 @@ public final class CaveVis implements Listener, AutoCloseable {
     public void onJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
 
-        if (!cache.ready(player.getEyeLocation())) return;
-
-        terrain.enable(player, cache.bounds());
         Session session = sessions.computeIfAbsent(
             player.getUniqueId(), unused -> new Session(player)
         );

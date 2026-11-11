@@ -16,7 +16,7 @@ From the folder where you want both projects, run these PowerShell commands:
 git clone https://github.com/Pintobox/PintoAntiCheat.git
 git clone https://github.com/Pintobox/PintoPaper.git
 cd PintoPaper
-git checkout --detach 57b245da22fcea6cf946f865083665e47dc42a51
+git checkout --detach e4cff2319588b9d14f3b2f09ae7eb9bafb756d61
 .\gradlew.bat applyPatches
 .\gradlew.bat createMojmapPaperclipJar -PpublishDevBundle publishToMavenLocal
 cd ..\PintoAntiCheat
@@ -29,15 +29,21 @@ compiles against that bundle and runs against the custom server JAR.
 
 ## Demo
 
-1. Join the server. Terrain loads normally at first.
-2. Run `/cavevis raybuild 16` and wait for the visibility cache to finish building.
-3. Run `/cavevis reveal` to turn on terrain filtering for your player.
+1. Join the server. CaveVis filters terrain automatically from the first chunk packet.
+2. Walk into a cave. Nearby terrain and sections approved by visibility scans appear as you move.
+3. Optionally run `/cavevis raybuild 16` to preload opacity data around your position.
+   Preloaded data survives chunk unloads until `/cavevis rayclear` releases it.
 
 ## How CaveVis works
 
 CaveVis groups blocks into 2×2×2 cells and stores one opacity bit per cell.
 A cell stops a ray only when all eight blocks are opaque. This keeps narrow
 openings from being treated as solid.
+
+CaveVis builds opacity data as chunks load and stores it per world and chunk
+column. Ordinary entries are removed when their chunks unload. Each scan takes
+an array snapshot around the player, and rays stop at columns whose opacity
+data is unavailable.
 
 Worker threads cast rays from the player's eye position through this grid.
 When a 16×16×16 section contains no opaque cells, a ray can skip the
@@ -56,7 +62,6 @@ filter the chunk data it sends to each player.
 ## Configuration
 
 Edit `CaveVisSettings.java`, then rebuild the plugin and restart the server.
-Terrain loads normally until you build a cache and run `/cavevis reveal`.
 
 Both height settings must be multiples of 16. At the defaults, terrain at
 Y=48 and above stays visible while filtering is active. Blocks from Y=48
@@ -73,7 +78,7 @@ of a hidden cave.
 | `DEFAULT_RAYS` | 2048 | Rays per scan. More rays sample more directions and take more CPU time. |
 | `RAY_WORKERS` | 2 | Number of worker threads available to run ray scans. |
 | `SCAN_STARTS_PER_TICK` | 6 | Maximum number of queued scans the server can start in one tick, shared across players. |
-| `SEARCH_RADIUS_CHUNKS` | 10 | Horizontal search radius in chunks. Scans use the available data in the built cache. |
+| `SEARCH_RADIUS_CHUNKS` | 10 | Horizontal search radius in chunks. Scans use the available data in the available opacity cache. |
 | `SEARCH_INTERVAL_TICKS` | 20 | Normal interval between automatic scans. Movement or terrain updates can request one sooner. |
 | `SEARCH_RETRY_DELAY_TICKS` | 20 | Initial wait before retrying a failed scan. Repeated failures increase the wait. |
 | `DEFAULT_BUILD_RADIUS_CHUNKS` | 16 | Radius used when `/cavevis raybuild` is called without a number. Radius 16 covers 33 × 33 chunk columns. |

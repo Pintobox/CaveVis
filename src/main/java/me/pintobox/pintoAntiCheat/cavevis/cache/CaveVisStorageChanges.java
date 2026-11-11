@@ -125,6 +125,25 @@ final class CaveVisStorageChanges implements AutoCloseable {
         return !pending.isEmpty();
     }
 
+    void unbindColumn(World world, int x, int z, int bottom, int height) {
+        UUID worldId = world.getUID();
+        var worldWatches = watches.get(worldId);
+        if (worldWatches == null) {
+            return;
+        }
+
+        for (int y = bottom; y < bottom + height; y++) {
+            Watch watch = worldWatches.remove(SectionPos.asLong(x, y, z));
+            if (watch != null) {
+                detach(watch);
+            }
+        }
+
+        if (worldWatches.isEmpty()) {
+            watches.remove(worldId);
+        }
+    }
+
     void retain(Predicate<Watch> keep) {
         var worlds = watches.values().iterator();
 
