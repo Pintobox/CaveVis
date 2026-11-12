@@ -6,26 +6,18 @@ clients can see.
 
 ## Build and run
 
-Install Git and JDK 21, and make sure your terminal uses Java 21.
-You’ll need access to both GitHub repositories. Clone them side by side
-because the plugin’s `runServer` task looks for `../PintoPaper`.
-
-From the folder where you want both projects, run these PowerShell commands:
+Requires JDK 21 and stock Paper 1.21.11. Tested on Paper build 132.
 
 ```powershell
 git clone https://github.com/Pintobox/PintoAntiCheat.git
-git clone https://github.com/Pintobox/PintoPaper.git
-cd PintoPaper
-git checkout --detach e4cff2319588b9d14f3b2f09ae7eb9bafb756d61
-.\gradlew.bat applyPatches
-.\gradlew.bat createMojmapPaperclipJar -PpublishDevBundle publishToMavenLocal
-cd ..\PintoAntiCheat
-.\gradlew.bat runServer --refresh-dependencies
+cd PintoAntiCheat
+.\gradlew.bat runServer
 ```
 
-The Paper build creates the server JAR and publishes the matching
-development bundle to your local Maven repository. PintoAntiCheat
-compiles against that bundle and runs against the custom server JAR.
+`runServer` launches a stock Paper test server with PintoAntiCheat loaded.
+
+To build the plugin for an existing server, run `.\gradlew.bat build` and
+copy the plugin JAR from `build/libs/` into the server's `plugins/` folder.
 
 ## Demo
 

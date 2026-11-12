@@ -4,7 +4,6 @@ import io.netty.channel.Channel;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
-import io.papermc.paper.cavevis.CaveVisJoinHook;
 import me.pintobox.pintoAntiCheat.cavevis.api.CaveVisApi;
 import me.pintobox.pintoAntiCheat.cavevis.api.CaveVisApi.ReceivedSections;
 import me.pintobox.pintoAntiCheat.cavevis.api.CaveVisApi.Section;
@@ -17,7 +16,6 @@ import net.minecraft.core.SectionPos;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.*;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
 import org.bukkit.Bukkit;
 import org.bukkit.World;
@@ -28,6 +26,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.world.WorldLoadEvent;
@@ -38,7 +37,6 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Consumer;
 
 public final class CaveVisTerrainDelivery
     implements Listener, AutoCloseable {
@@ -70,9 +68,6 @@ public final class CaveVisTerrainDelivery
 
     private final JavaPlugin plugin;
 
-    private final Consumer<ServerPlayer> joinHook =
-        player -> attach(player.getBukkitEntity());
-
     private final Map<UUID, State> states =
         new ConcurrentHashMap<>();
 
@@ -86,8 +81,6 @@ public final class CaveVisTerrainDelivery
         this.config = config;
 
         Bukkit.getWorlds().forEach(this::policyFor);
-
-        CaveVisJoinHook.register(joinHook);
 
         Bukkit.getPluginManager().registerEvents(this, plugin);
 
@@ -118,6 +111,11 @@ public final class CaveVisTerrainDelivery
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onWorldUnload(WorldUnloadEvent event) {
         worldPolicies.remove(((CraftWorld) event.getWorld()).getHandle().dimension());
+    }
+
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onJoin(PlayerJoinEvent event) {
+        attach(event.getPlayer());
     }
 
     @EventHandler
@@ -1192,7 +1190,6 @@ public final class CaveVisTerrainDelivery
 
     @Override
     public void close() {
-        CaveVisJoinHook.unregister(joinHook);
         HandlerList.unregisterAll(this);
         disableAll();
 

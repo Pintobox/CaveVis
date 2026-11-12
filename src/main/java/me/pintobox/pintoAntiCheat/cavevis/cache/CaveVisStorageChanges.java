@@ -1,14 +1,20 @@
 package me.pintobox.pintoAntiCheat.cavevis.cache;
 
+import ca.spottedleaf.moonrise.patches.fast_palette.FastPaletteData;
+import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.shorts.ShortArrayList;
+import net.minecraft.core.IdMap;
 import net.minecraft.core.SectionPos;
+import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.util.BitStorage;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunkSection;
+import net.minecraft.world.level.chunk.Palette;
+import net.minecraft.world.level.chunk.PaletteResize;
 import net.minecraft.world.level.chunk.PalettedContainer;
 import org.bukkit.World;
 
-import java.lang.invoke.MethodHandle;
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.MethodType;
 import java.lang.ref.WeakReference;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -20,101 +26,47 @@ import java.util.function.Predicate;
  * World and cache access stay on the server thread.
  */
 final class CaveVisStorageChanges implements AutoCloseable {
-    private static final MethodHandle GET;
-    private static final MethodHandle SET;
-
-    static {
-        try {
-            var lookup = MethodHandles.publicLookup();
-
-            GET = lookup.findVirtual(
-                PalettedContainer.class,
-                "pinto$getChangeListener",
-                MethodType.methodType(IntConsumer.class)
-            );
-
-            SET = lookup.findVirtual(
-                PalettedContainer.class,
-                "pinto$setChangeListener",
-                MethodType.methodType(void.class, IntConsumer.class)
-            );
-        } catch (ReflectiveOperationException error) {
-            throw new IllegalStateException(
-                "This plugin requires the PintoPaper storage patch",
-                error
-            );
-        }
-    }
-
     private final Queue<Watch> pending =
         new ConcurrentLinkedQueue<>();
 
     private final Map<UUID, Long2ObjectOpenHashMap<Watch>> watches =
         new HashMap<>();
 
-    Watch bind(
-        World world,
-        int x,
-        int y,
-        int z,
-        LevelChunkSection section
-    ) {
+    Watch bind(World world, int x, int y, int z, LevelChunkSection section) {
         var worldWatches = watches.computeIfAbsent(
-            world.getUID(),
-            unused -> new Long2ObjectOpenHashMap<>()
+            world.getUID(), unused -> new Long2ObjectOpenHashMap<>()
         );
 
         long key = SectionPos.asLong(x, y, z);
         Watch previous = worldWatches.get(key);
         var states = section.getStates();
 
-        if (previous != null && !previous.closed
-            && previous.section.refersTo(section)) {
-            if (!previous.data.refersTo(states.data)) {
-                previous.data = new WeakReference<>(states.data);
-                previous.accept(-1);
+        if (previous != null && !previous.closed && previous.section.refersTo(section)) {
+            if (!previous.matches(section)) {
+                previous.attach(states);
             }
-
             return previous;
-        }
-
-        IntConsumer listener = get(states);
-
-        if (listener instanceof Watch watch
-            && watch.owner == this
-            && watch.world.equals(world)
-            && watch.x == x
-            && watch.y == y
-            && watch.z == z
-            && watch.section.refersTo(section)) {
-
-            if (!watch.data.refersTo(states.data)) {
-                watch.data = new WeakReference<>(states.data);
-                watch.accept(-1);
-            }
-
-            return watch;
-        }
-
-        if (listener != null) {
-            throw new IllegalStateException(
-                "A block container already has a different storage listener"
-            );
         }
 
         if (previous != null) {
             detach(previous);
         }
 
-        Watch watch = new Watch(
-            this, world, x, y, z, section
-        );
-
-        set(states, watch);
+        Watch watch = new Watch(this, world, x, y, z, section);
+        watch.attach(states);
         worldWatches.put(key, watch);
-        watch.accept(-1);
-
         return watch;
+    }
+
+    private void detach(Watch watch) {
+        synchronized (watch) {
+            watch.closed = true;
+        }
+
+        LevelChunkSection section = watch.section.get();
+        if (section != null) {
+            watch.unwrap(section.getStates());
+        }
     }
 
     Watch poll() {
@@ -166,58 +118,10 @@ final class CaveVisStorageChanges implements AutoCloseable {
         }
     }
 
-    private void detach(Watch watch) {
-        synchronized (watch) {
-            watch.closed = true;
-        }
-
-        LevelChunkSection section = watch.section.get();
-
-        if (section != null
-            && get(section.getStates()) == watch) {
-            set(section.getStates(), null);
-        }
-    }
-
     @Override
     public void close() {
         retain(watch -> false);
         pending.clear();
-    }
-
-    private static IntConsumer get(PalettedContainer<?> states) {
-        try {
-            return (IntConsumer) GET.invokeExact(
-                (PalettedContainer) states
-            );
-        } catch (Throwable error) {
-            throw failure(error);
-        }
-    }
-
-    private static void set(
-        PalettedContainer<?> states,
-        IntConsumer listener
-    ) {
-        try {
-            SET.invokeExact(
-                (PalettedContainer) states,
-                listener
-            );
-        } catch (Throwable error) {
-            throw failure(error);
-        }
-    }
-
-    private static RuntimeException failure(Throwable error) {
-        if (error instanceof Error fatal) {
-            throw fatal;
-        }
-
-        return new IllegalStateException(
-            "PintoPaper storage bridge failed",
-            error
-        );
     }
 
     static final class Watch implements IntConsumer {
@@ -228,7 +132,6 @@ final class CaveVisStorageChanges implements AutoCloseable {
         final int x, y, z;
 
         final WeakReference<LevelChunkSection> section;
-        WeakReference<Object> data;
 
         private final long[] cells = new long[8];
 
@@ -251,9 +154,6 @@ final class CaveVisStorageChanges implements AutoCloseable {
             this.z = z;
 
             this.section = new WeakReference<>(section);
-            this.data = new WeakReference<>(
-                section.getStates().data
-            );
         }
 
         @Override
@@ -281,7 +181,90 @@ final class CaveVisStorageChanges implements AutoCloseable {
         boolean matches(LevelChunkSection current) {
             return !closed
                 && section.refersTo(current)
-                && data.refersTo(current.getStates().data);
+                && owns(current.getStates().data);
+        }
+
+        private boolean owns(PalettedContainer.Data<BlockState> data) {
+            return data.storage() instanceof WatchingStorage storage
+                && storage.onWrite == this
+                && data.palette() instanceof WatchingPalette<?>;
+        }
+
+        private void attach(PalettedContainer<BlockState> states) {
+            synchronized (states) {
+                var current = states.data;
+                if (owns(current)) {
+                    return;
+                }
+
+                if (current.storage() instanceof WatchingStorage
+                    || current.palette() instanceof WatchingPalette<?>) {
+                    throw new IllegalStateException(
+                        "Block storage already has a different CaveVis wrapper"
+                    );
+                }
+
+                install(states, current);
+                accept(-1);
+            }
+        }
+
+        private void install(
+            PalettedContainer<BlockState> states,
+            PalettedContainer.Data<BlockState> original
+        ) {
+            var replacement = new PalettedContainer.Data<>(
+                original.configuration(),
+                new WatchingStorage(original.storage(), this),
+                new WatchingPalette<>(
+                    original.palette(),
+                    states,
+                    (bits, state) -> resize(states, bits, state)
+                )
+            );
+
+            bindFastPalette(replacement);
+            states.data = replacement;
+        }
+
+        private int resize(
+            PalettedContainer<BlockState> states, int bits, BlockState state
+        ) {
+            synchronized (states) {
+                var before = states.data;
+                boolean wasWatching = !closed && owns(before);
+                int id = states.onResize(bits, state);
+
+                var after = states.data;
+                if (wasWatching && !closed && after != before) {
+                    install(states, after);
+                    accept(-1);
+                }
+
+                return id;
+            }
+        }
+
+        private void unwrap(PalettedContainer<BlockState> states) {
+            synchronized (states) {
+                var current = states.data;
+                if (!owns(current)) {
+                    return;
+                }
+
+                var storage = (WatchingStorage) current.storage();
+                var palette = (WatchingPalette<BlockState>) current.palette();
+                var replacement = new PalettedContainer.Data<>(
+                    current.configuration(), storage.original, palette.original
+                );
+
+                bindFastPalette(replacement);
+                states.data = replacement;
+            }
+        }
+
+        private static <T> void bindFastPalette(PalettedContainer.Data<T> data) {
+            data.moonrise$setPalette(data.palette().moonrise$getRawPalette(data));
         }
 
         boolean drain(long[] output) {
@@ -305,6 +288,135 @@ final class CaveVisStorageChanges implements AutoCloseable {
 
         boolean hasPending() {
             return queued && !closed;
+        }
+    }
+
+    private static final class WatchingPalette<T> implements Palette<T> {
+        private final Palette<T> original;
+        private final PaletteResize<T> container;
+        private final PaletteResize<T> resizeCallback;
+
+        WatchingPalette(
+            Palette<T> original,
+            PaletteResize<T> container,
+            PaletteResize<T> resizeCallback
+        ) {
+            this.original = original;
+            this.container = container;
+            this.resizeCallback = resizeCallback;
+        }
+
+        @Override
+        public int idFor(T state, PaletteResize<T> resizeHandler) {
+            return original.idFor(
+                state,
+                resizeHandler == container ? resizeCallback : resizeHandler
+            );
+        }
+
+        @Override
+        public T valueFor(int id) {
+            return original.valueFor(id);
+        }
+
+        @Override
+        public boolean maybeHas(Predicate<T> filter) {
+            return original.maybeHas(filter);
+        }
+
+        @Override
+        public void read(FriendlyByteBuf buffer, IdMap<T> map) {
+            original.read(buffer, map);
+        }
+
+        @Override
+        public void write(FriendlyByteBuf buffer, IdMap<T> map) {
+            original.write(buffer, map);
+        }
+
+        @Override
+        public int getSerializedSize(IdMap<T> map) {
+            return original.getSerializedSize(map);
+        }
+
+        @Override
+        public int getSize() {
+            return original.getSize();
+        }
+
+        @Override
+        public Palette<T> copy() {
+            return original.copy();
+        }
+
+        @Override
+        public T[] moonrise$getRawPalette(FastPaletteData<T> data) {
+            return original.moonrise$getRawPalette(data);
+        }
+    }
+
+    private static final class WatchingStorage implements BitStorage {
+        private final BitStorage original;
+        private final IntConsumer onWrite;
+
+        WatchingStorage(BitStorage original, IntConsumer onWrite) {
+            this.original = original;
+            this.onWrite = onWrite;
+        }
+
+        @Override
+        public void set(int index, int value) {
+            original.set(index, value);
+            onWrite.accept(index);
+        }
+
+        @Override
+        public int getAndSet(int index, int value) {
+            int previous = original.getAndSet(index, value);
+            if (previous != value) {
+                onWrite.accept(index);
+            }
+            return previous;
+        }
+
+        @Override
+        public int get(int index) {
+            return original.get(index);
+        }
+
+        @Override
+        public long[] getRaw() {
+            return original.getRaw();
+        }
+
+        @Override
+        public int getSize() {
+            return original.getSize();
+        }
+
+        @Override
+        public int getBits() {
+            return original.getBits();
+        }
+
+        @Override
+        public void getAll(IntConsumer consumer) {
+            original.getAll(consumer);
+        }
+
+        @Override
+        public void unpack(int[] values) {
+            original.unpack(values);
+        }
+
+        @Override
+        public BitStorage copy() {
+            return original.copy();
+        }
+
+        @Override
+        public Int2ObjectOpenHashMap<ShortArrayList> moonrise$countEntries() {
+            return original.moonrise$countEntries();
         }
     }
 }

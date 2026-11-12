@@ -1,11 +1,11 @@
 package me.pintobox.pintoAntiCheat.cavevis.core;
 
-import java.util.*;
-
 import me.pintobox.pintoAntiCheat.cavevis.api.CaveVisApi.WorldRules;
 import org.bukkit.World;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.plugin.java.JavaPlugin;
+
+import java.util.*;
 
 public final class CaveVisConfiguration {
     private static final int MAX_NEAR_REVEAL_RADIUS_BLOCKS = 32;

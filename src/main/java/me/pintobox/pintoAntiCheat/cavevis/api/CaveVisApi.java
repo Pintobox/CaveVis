@@ -1,12 +1,13 @@
 package me.pintobox.pintoAntiCheat.cavevis.api;
 
-import java.util.List;
-import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 import org.bukkit.World;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
+
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 public interface CaveVisApi {
     /**

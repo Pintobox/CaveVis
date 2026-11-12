@@ -8,7 +8,6 @@ group = 'me.pintobox'
 version = '1.0'
 
 repositories {
-    mavenLocal()
     mavenCentral()
     maven {
         name = "papermc-repo"
@@ -23,10 +22,6 @@ dependencies {
 tasks {
     runServer {
         minecraftVersion("1.21.11")
-
-        serverJar(fileTree("../PintoPaper/paper-server/build/libs") {
-            include("*paperclip*-mojmap.jar")
-        }.singleFile)
     }
 }
 

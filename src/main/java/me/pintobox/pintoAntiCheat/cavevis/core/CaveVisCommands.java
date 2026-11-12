@@ -1,6 +1,5 @@
 package me.pintobox.pintoAntiCheat.cavevis.core;
 
-import me.pintobox.pintoAntiCheat.cavevis.cache.CaveVisRayCache;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;

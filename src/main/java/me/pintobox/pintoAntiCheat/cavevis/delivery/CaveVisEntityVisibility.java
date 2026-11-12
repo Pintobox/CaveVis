@@ -2,8 +2,6 @@ package me.pintobox.pintoAntiCheat.cavevis.delivery;
 
 import com.destroystokyo.paper.event.entity.EntityRemoveFromWorldEvent;
 import io.papermc.paper.event.player.PlayerTrackEntityEvent;
-import java.util.*;
-
 import me.pintobox.pintoAntiCheat.cavevis.core.CaveVisConfiguration;
 import me.pintobox.pintoAntiCheat.cavevis.core.CaveVisSettings;
 import net.minecraft.server.level.ChunkMap;
@@ -15,12 +13,17 @@ import org.bukkit.entity.Entity;
 import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.TextDisplay;
-import org.bukkit.event.*;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
+import org.bukkit.event.HandlerList;
+import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.server.PluginDisableEvent;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.potion.PotionEffectType;
+
+import java.util.*;
 
 public final class CaveVisEntityVisibility
     implements Listener, AutoCloseable {
