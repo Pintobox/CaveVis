@@ -100,6 +100,24 @@ it unloads by passing its saved UUID.
 
 `/cavevis clear` releases preload pins across all worlds.
 
+### Keep an entity visible
+
+CaveVis exempts glowing entities, see-through text displays, and entities
+with always-visible nameplates from terrain-based entity culling.
+
+To exempt another entity, call this on the server thread after it spawns:
+
+```java
+caveVis.setEntityAlwaysVisible(this, entity, true);
+
+// Clear this plugin's exemption.
+caveVis.setEntityAlwaysVisible(this, entity, false);
+```
+
+The exemption ends when cleared, when the entity leaves its world (including
+chunk unload), or when the owning plugin is disabled. Normal tracking range
+and other plugins' visibility rules still apply.
+
 ## How CaveVis works
 
 CaveVis groups blocks into 2×2×2 cells and stores one opacity bit per cell.

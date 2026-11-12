@@ -4,7 +4,9 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import org.bukkit.World;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
 
 public interface CaveVisApi {
     /**
@@ -20,7 +22,7 @@ public interface CaveVisApi {
      *
      * Call on the server thread. The future completes after the opacity
      * data is published, or completes exceptionally if the request is
-     * rejected, fails, or is cancelled.
+     * rejected, fails, or is canceled.
      *
      * Pins remain until releasePreloaded is called or the preload cache
      * is cleared.
@@ -61,6 +63,16 @@ public interface CaveVisApi {
     ReceivedSections getReceivedSections(Player viewer);
 
     /**
+     * Sets whether CaveVis should exempt this entity from terrain-based culling
+     * on behalf of the calling plugin. Normal entity tracking still applies.
+     *
+     * Call on the server thread after the entity has spawned. A mark lasts
+     * until cleared, the entity leaves its world, or the owner is disabled.
+     * Players already bypass CaveVis entity culling.
+     */
+    void setEntityAlwaysVisible(Plugin owner, Entity entity, boolean visible);
+
+    /**
      * Immutable CaveVis settings for one world. Both height cutoffs use
      * block Y coordinates and must be multiples of 16.
      *
@@ -74,7 +86,7 @@ public interface CaveVisApi {
      * @param entityCulling whether to hide non-player entities in hidden terrain
      * @param particleCulling whether to filter particle effects from hidden terrain
      */
-    public record WorldRules(
+    record WorldRules(
         int alwaysVisibleFromY,
         int occludersUpToY,
         int searchRadiusChunks,

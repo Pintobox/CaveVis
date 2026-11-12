@@ -1,5 +1,6 @@
 package me.pintobox.pintoAntiCheat.cavevis.delivery;
 
+import com.destroystokyo.paper.event.entity.EntityRemoveFromWorldEvent;
 import io.papermc.paper.event.player.PlayerTrackEntityEvent;
 import java.util.*;
 
@@ -11,10 +12,15 @@ import org.bukkit.Bukkit;
 import org.bukkit.craftbukkit.entity.CraftEntity;
 import org.bukkit.craftbukkit.entity.CraftPlayer;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.TextDisplay;
 import org.bukkit.event.*;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.server.PluginDisableEvent;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.potion.PotionEffectType;
 
 public final class CaveVisEntityVisibility
     implements Listener, AutoCloseable {
@@ -23,6 +29,7 @@ public final class CaveVisEntityVisibility
     private final CaveVisTerrainDelivery terrain;
     private final CaveVisConfiguration config;
     private final Map<UUID, Watch> watches = new HashMap<>();
+    private final Map<UUID, Set<Plugin>> alwaysVisibleOwners = new HashMap<>();
 
     private int ticks;
 
@@ -206,6 +213,49 @@ public final class CaveVisEntityVisibility
         }
     }
 
+    public void setAlwaysVisible(Plugin owner, Entity entity, boolean visible) {
+        if (entity instanceof Player) {
+            return;
+        }
+
+        UUID id = entity.getUniqueId();
+
+        if (visible) {
+            if (!owner.isEnabled() || !entity.isValid()) {
+                throw new IllegalArgumentException(
+                    "An enabled plugin and a spawned entity are required"
+                );
+            }
+
+            alwaysVisibleOwners.computeIfAbsent(id, ignored -> new HashSet<>())
+                .add(owner);
+            return;
+        }
+
+        Set<Plugin> owners = alwaysVisibleOwners.get(id);
+        if (owners != null) {
+            owners.remove(owner);
+            if (owners.isEmpty()) {
+                alwaysVisibleOwners.remove(id);
+            }
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onEntityRemoved(EntityRemoveFromWorldEvent event) {
+        alwaysVisibleOwners.remove(event.getEntity().getUniqueId());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPluginDisabled(PluginDisableEvent event) {
+        Plugin owner = event.getPlugin();
+
+        alwaysVisibleOwners.values().removeIf(owners -> {
+            owners.remove(owner);
+            return owners.isEmpty();
+        });
+    }
+
     private Watch watch(Player viewer) {
         UUID id = viewer.getUniqueId();
         UUID world = viewer.getWorld().getUID();
@@ -231,6 +281,17 @@ public final class CaveVisEntityVisibility
         Entry entry,
         long revision
     ) {
+        Entity entity = entry.entity;
+
+        if (entity.isGlowing()
+            || (entity instanceof LivingEntity living
+            && living.hasPotionEffect(PotionEffectType.GLOWING))
+            || (entity instanceof TextDisplay text && text.isSeeThrough())
+            || entity.isCustomNameVisible()
+            || alwaysVisibleOwners.containsKey(entity.getUniqueId())) {
+            return true;
+        }
+
         AABB box = ((CraftEntity) entry.entity)
             .getHandle().getBoundingBox();
 
@@ -350,6 +411,7 @@ public final class CaveVisEntityVisibility
         }
 
         watches.clear();
+        alwaysVisibleOwners.clear();
     }
 
     private static int section(double coordinate) {

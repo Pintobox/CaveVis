@@ -11,6 +11,7 @@ import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.PluginCommand;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -20,6 +21,7 @@ import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
@@ -197,6 +199,25 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
         }
 
         return terrain.getReceivedSections(viewer);
+    }
+
+    @Override
+    public void setEntityAlwaysVisible(Plugin owner, Entity entity, boolean visible) {
+        if (!Bukkit.isPrimaryThread()) {
+            throw new IllegalStateException(
+                "CaveVis entity visibility must be changed on the server thread"
+            );
+        }
+
+        if (cache == null) {
+            throw new IllegalStateException("CaveVis is not running");
+        }
+
+        entities.setAlwaysVisible(
+            Objects.requireNonNull(owner, "owner"),
+            Objects.requireNonNull(entity, "entity"),
+            visible
+        );
     }
 
     private static void requireVisibilityQueryThread() {
