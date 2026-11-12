@@ -26,6 +26,29 @@ copy the plugin JAR from `build/libs/` into the server's `plugins/` folder.
 3. Optionally run `/cavevis build 16` to preload opacity data around your position.
    Preloaded data survives chunk unloads until `/cavevis clear` releases it.
 
+## Admin commands
+
+All `/cavevis` commands require the `pintoanticheat.admin` permission.
+Server operators have it by default. Run `/cavevis` to see the command list in-game.
+
+| Command | Effect |
+| --- | --- |
+| `/cavevis build [radius]` | Preload and pin opacity data around your current chunk. The radius is measured in chunks and defaults to `default-preload-radius-chunks` in the config. Run this in-game. |
+| `/cavevis cancel` | Cancel the active preload and keep previously completed preloads. |
+| `/cavevis clear` | Clear the opacity cache and release preload pins across all worlds. Terrain filtering stays active. |
+| `/cavevis profile on` | Start collecting profiling data and show scan timings in your action bar. |
+| `/cavevis profile off` | Stop profiling and clear the action bar. |
+| `/cavevis profile reset` | Reset profiling measurements. |
+| `/cavevis profile detail` | Toggle detailed scan preparation timings. Enable profiling first. |
+| `/cavevis raystats [tick]` | Show visibility scan statistics. Add `tick` to see server tick timings. |
+| `/cavevis bypass on [player]` | Disable CaveVis filtering for yourself or the named online player. |
+| `/cavevis bypass off [player]` | Restore CaveVis filtering for yourself or the named online player. |
+
+When running `bypass` from the console, specify an online player. The bypass
+follows the player across world changes and clears when they disconnect.
+CaveVis refreshes chunks already on the client through its delivery queue,
+so the visual change is gradual.
+
 ## Using CaveVis from another plugin
 
 Add PintoAntiCheat as a `compileOnly` dependency and declare
@@ -39,6 +62,17 @@ CaveVisApi caveVis = Bukkit.getServicesManager().load(CaveVisApi.class);
 if (caveVis == null) {
     throw new IllegalStateException("CaveVis API is unavailable");
 }
+```
+
+### Bypass filtering for a player
+
+Call these methods on the server thread with an online player. They use the
+same session bypass as the admin command.
+
+```java
+caveVis.setVisibilityBypass(player, true);  // Disable filtering
+boolean bypassed = caveVis.hasVisibilityBypass(player);
+caveVis.setVisibilityBypass(player, false); // Restore filtering
 ```
 
 ### Enable a temporary world

@@ -7,7 +7,7 @@ description: Server side cave visibility filtering
 
 commands:
   cavevis:
-    description: Control cave visibility and profiling
+    description: Manage CaveVis builds, profiling, and player bypasses
     permission: pintoanticheat.admin
 
 permissions:

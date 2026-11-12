@@ -331,6 +331,7 @@ public final class CaveVisTerrainDelivery
                 s.columns.clear();
                 s.queue.clear();
                 s.urgent.clear();
+                s.bypassColumns.clear();
 
                 s.nearBox = null;
                 s.nearDirty = true;
@@ -339,8 +340,25 @@ public final class CaveVisTerrainDelivery
             }
 
             if (packet instanceof ClientboundForgetLevelChunkPacket unload) {
-                if (s.columns.remove(unload.pos().toLong()) != null) {
+                long key = unload.pos().toLong();
+                s.bypassColumns.remove(key);
+
+                if (s.columns.remove(key) != null) {
                     s.deliveryRevision++;
+                }
+
+                return false;
+            }
+
+            if (s.bypass) {
+                if (packet instanceof ClientboundLevelChunkWithLightPacket chunk) {
+                    long key = key(chunk.getX(), chunk.getZ());
+                    s.bypassColumns.add(key);
+
+                    // The native packet supplies the full column, so cancel its queued restore.
+                    if (s.columns.remove(key) != null) {
+                        s.deliveryRevision++;
+                    }
                 }
 
                 return false;
@@ -456,7 +474,7 @@ public final class CaveVisTerrainDelivery
             WorldPolicy policy = policyFor(world);
             s.rules = policy.rules();
             s.enabled = policy.enabled();
-            s.active = s.enabled;
+            s.active = s.enabled && !s.bypass;
             s.resetPending = false;
             s.pendingDimension = null;
             return true;
@@ -469,7 +487,7 @@ public final class CaveVisTerrainDelivery
         if (s == null) return false;
 
         synchronized (s) {
-            return s.enabled && (s.active || s.resetPending);
+            return !s.bypass && s.enabled && (s.active || s.resetPending);
         }
     }
 
@@ -549,6 +567,77 @@ public final class CaveVisTerrainDelivery
                     enqueue(s, key, c);
                 }
             }
+        }
+    }
+
+    public boolean hasVisibilityBypass(Player player) {
+        State s = states.get(player.getUniqueId());
+        if (s == null) {
+            return false;
+        }
+
+        synchronized (s) {
+            return s.bypass;
+        }
+    }
+
+    public boolean setVisibilityBypass(Player player, boolean bypass) {
+        State s = states.get(player.getUniqueId());
+        if (s == null) {
+            throw new IllegalStateException("CaveVis delivery is not ready for this player");
+        }
+
+        synchronized (s) {
+            if (s.bypass == bypass) {
+                return false;
+            }
+
+            s.bypass = bypass;
+            s.active = s.enabled && !bypass && !s.resetPending;
+            s.epoch++;
+            s.deliveryRevision++;
+            s.receivedSnapshot = null;
+            s.accepted = -1;
+            s.visible = null;
+
+            s.queue.clear();
+            s.urgent.clear();
+            s.nearBox = null;
+            s.nearDirty = true;
+
+            if (bypass) {
+                // Include pending columns whose original packets CaveVis intercepted.
+                s.bypassColumns.addAll(s.columns.keySet());
+
+                for (var entry : s.columns.entrySet()) {
+                    Column c = entry.getValue();
+                    c.inFlight = false;
+                    c.retryScheduled = false;
+                    c.writingMask = null;
+                    c.fresh = true;
+                    c.queued = false;
+                    c.urgentQueued = false;
+                    c.near = false;
+
+                    enqueue(s, entry.getKey(), c);
+                }
+            } else {
+                // Fresh columns start with empty delivered masks.
+                s.columns.clear();
+
+                if (s.enabled) {
+                    for (long key : s.bypassColumns) {
+                        Column c = new Column();
+                        c.required = ++s.requested;
+                        s.columns.put(key, c);
+                        enqueue(s, key, c);
+                    }
+                }
+
+                s.bypassColumns.clear();
+            }
+
+            return true;
         }
     }
 
@@ -782,10 +871,9 @@ public final class CaveVisTerrainDelivery
         }
 
         synchronized (s) {
+            if (s.bypass) return true;
             if (s.resetPending) return false;
-            if (!s.active) {
-                return true;
-            }
+            if (!s.active) return true;
 
             if (!s.world.equals(world)) {
                 return false;
@@ -1346,6 +1434,9 @@ public final class CaveVisTerrainDelivery
         boolean enabled;
         boolean resetPending;
         ResourceKey<Level> pendingDimension;
+
+        boolean bypass;
+        final Set<Long> bypassColumns = new HashSet<>();
 
         long epoch;
         long requested;

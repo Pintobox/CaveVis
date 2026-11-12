@@ -64,6 +64,16 @@ public interface CaveVisApi {
     ReceivedSections getReceivedSections(Player viewer);
 
     /**
+     * Sets whether CaveVis filters terrain and effects for this online player.
+     * Call on the server thread. The bypass lasts until the player disconnects.
+     * Existing chunk columns are refreshed through the delivery queue.
+     */
+    void setVisibilityBypass(Player player, boolean bypass);
+
+    /** Checks the player's session bypass. Call on the server thread. */
+    boolean hasVisibilityBypass(Player player);
+
+    /**
      * Sets whether CaveVis should exempt this entity from terrain-based culling
      * on behalf of the calling plugin. Normal entity tracking still applies.
      *

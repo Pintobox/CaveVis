@@ -220,6 +220,45 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
         );
     }
 
+    @Override
+    public void setVisibilityBypass(Player player, boolean bypass) {
+        requireVisibilityQueryThread();
+
+        if (cache == null) {
+            throw new IllegalStateException("CaveVis is not running");
+        }
+
+        Objects.requireNonNull(player, "player");
+        if (!player.isOnline()) {
+            throw new IllegalArgumentException("The player must be online");
+        }
+
+        if (!terrain.setVisibilityBypass(player, bypass)) {
+            return;
+        }
+
+        UUID playerId = player.getUniqueId();
+        pendingScans.remove(playerId);
+
+        Session session = sessions.computeIfAbsent(
+            playerId, unused -> new Session(player)
+        );
+
+        cancel(session);
+        session.automatic = !bypass;
+        session.force = !bypass;
+        session.failures = 0;
+        session.retryAtTick = 0;
+    }
+
+    @Override
+    public boolean hasVisibilityBypass(Player player) {
+        requireVisibilityQueryThread();
+
+        return cache != null
+            && terrain.hasVisibilityBypass(Objects.requireNonNull(player, "player"));
+    }
+
     private static void requireVisibilityQueryThread() {
         if (!Bukkit.isPrimaryThread()) {
             throw new IllegalStateException(
@@ -387,6 +426,10 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
                     s.force = true;
                     s.failures = 0;
                     s.retryAtTick = 0;
+                }
+
+                if (terrain.hasVisibilityBypass(player)) {
+                    continue;
                 }
 
                 if (s.future != null && s.future.isDone()) {

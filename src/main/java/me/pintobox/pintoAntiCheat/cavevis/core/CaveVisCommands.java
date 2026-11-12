@@ -1,5 +1,6 @@
 package me.pintobox.pintoAntiCheat.cavevis.core;
 
+import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
@@ -39,6 +40,37 @@ final class CaveVisCommands implements CommandExecutor, TabCompleter {
                     caveVis.clear();
                     message(sender, "Ray cache cleared; terrain filtering remains active.");
                 }
+                case "bypass" -> {
+                    if (args.length < 2 || args.length > 3) {
+                        throw new IllegalArgumentException(
+                            "Usage: /cavevis bypass <on|off> [player]"
+                        );
+                    }
+
+                    boolean bypass = switch (args[1].toLowerCase(Locale.ROOT)) {
+                        case "on" -> true;
+                        case "off" -> false;
+                        default -> throw new IllegalArgumentException(
+                            "Usage: /cavevis bypass <on|off> [player]"
+                        );
+                    };
+
+                    if (args.length == 2 && !(sender instanceof Player)) {
+                        throw new IllegalArgumentException("Specify an online player from console");
+                    }
+
+                    Player target = args.length == 2
+                        ? player(sender)
+                        : Bukkit.getPlayerExact(args[2]);
+
+                    if (target == null) {
+                        throw new IllegalArgumentException("No online player named " + args[2]);
+                    }
+
+                    caveVis.setVisibilityBypass(target, bypass);
+                    message(sender, "Visibility bypass for " + target.getName()
+                        + (bypass ? " enabled." : " disabled."));
+                }
                 case "profile" -> {
                     if (args.length != 2) {
                         throw new IllegalArgumentException(
@@ -59,7 +91,7 @@ final class CaveVisCommands implements CommandExecutor, TabCompleter {
                     }
                 }
                 default -> message(sender,
-                    "/cavevis build [radius] | cancel | clear "
+                    "/cavevis build [radius] | cancel | clear | bypass <on|off> [player] "
                         + "| profile <on|off|reset|detail> | raystats [tick]");
             }
         } catch (IllegalArgumentException | IllegalStateException e) {
@@ -76,11 +108,16 @@ final class CaveVisCommands implements CommandExecutor, TabCompleter {
         if (args.length == 0) return List.of();
 
         List<String> options = args.length == 1
-            ? List.of("build", "cancel", "clear", "profile", "raystats")
+            ? List.of("build", "cancel", "clear", "profile", "raystats", "bypass")
             : args.length == 2 && args[0].equalsIgnoreCase("profile")
             ? List.of("on", "off", "reset", "detail")
             : args.length == 2 && args[0].equalsIgnoreCase("raystats")
             ? List.of("tick")
+            : args.length == 2 && args[0].equalsIgnoreCase("bypass")
+            ? List.of("on", "off")
+            : args.length == 3 && args[0].equalsIgnoreCase("bypass")
+            && (args[1].equalsIgnoreCase("on") || args[1].equalsIgnoreCase("off"))
+            ? Bukkit.getOnlinePlayers().stream().map(Player::getName).sorted().toList()
             : List.of();
 
         String prefix = args[args.length - 1].toLowerCase(Locale.ROOT);
