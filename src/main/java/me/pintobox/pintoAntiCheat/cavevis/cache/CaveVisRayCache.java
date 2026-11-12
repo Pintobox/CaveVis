@@ -1,9 +1,10 @@
 package me.pintobox.pintoAntiCheat.cavevis.cache;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import me.pintobox.pintoAntiCheat.cavevis.core.CaveVisConfiguration;
+import me.pintobox.pintoAntiCheat.cavevis.core.CaveVisSettings;
 import me.pintobox.pintoAntiCheat.cavevis.delivery.CaveVisVisibility;
 import me.pintobox.pintoAntiCheat.cavevis.profiling.CaveVisPrepProfiler;
-import me.pintobox.pintoAntiCheat.cavevis.core.CaveVisSettings;
 import me.pintobox.pintoAntiCheat.cavevis.visibility.CaveVisRayData;
 import me.pintobox.pintoAntiCheat.cavevis.visibility.CaveVisRaycast;
 import net.minecraft.world.level.chunk.ChunkAccess;
@@ -42,7 +43,8 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
     private static final long AUTOMATIC_CAPTURE_BUDGET_NANOS = 1_000_000L;
 
     private final JavaPlugin plugin;
-    private final ExecutorService rays = Executors.newFixedThreadPool(CaveVisSettings.RAY_WORKERS);
+    private final CaveVisConfiguration config;
+    private final ExecutorService rays;
     private final CaveVisStorageChanges changes = new CaveVisStorageChanges();
     private final long[] dirtyCells = new long[8];
     private final Map<UUID, WorldCache> worlds = new HashMap<>();
@@ -66,16 +68,23 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
 
     private record Loaded(int index, Chunk chunk, boolean ticket) {}
 
-    public CaveVisRayCache(JavaPlugin plugin) {
+    public CaveVisRayCache(JavaPlugin plugin, CaveVisConfiguration config) {
         this.plugin = plugin;
-        setRays(CaveVisSettings.DEFAULT_RAYS);
+        this.config = config;
+        rays = Executors.newFixedThreadPool(config.rayWorkers);
+        setRays(config.raysPerScan);
 
         Bukkit.getPluginManager().registerEvents(this, plugin);
 
         for (World world : Bukkit.getWorlds()) {
-            for (Chunk chunk : world.getLoadedChunks()) {
-                captures.add(world.getUID(), chunk.getX(), chunk.getZ());
-            }
+            if (!config.enabled(world)) continue;
+            queueLoadedChunks(world);
+        }
+    }
+
+    public void queueLoadedChunks(World world) {
+        for (Chunk chunk : world.getLoadedChunks()) {
+            captures.add(world.getUID(), chunk.getX(), chunk.getZ());
         }
     }
 
@@ -83,7 +92,7 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
         return prepProfiler;
     }
 
-    public void setRays(int count) {
+    private void setRays(int count) {
         if (count < MIN_RAYS
             || count > MAX_RAYS) {
             throw new IllegalArgumentException(
@@ -107,7 +116,7 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
 
     public boolean ready(Location eye) {
         World world = eye.getWorld();
-        if (world == null) {
+        if (world == null || !config.enabled(world)) {
             return false;
         }
 
@@ -137,6 +146,7 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
     public CompletableFuture<Scan> search(
         Location eye,
         int radius,
+        boolean profileScan,
         AtomicBoolean cancelled
     ) {
         if (!Bukkit.isPrimaryThread()) {
@@ -147,21 +157,23 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
 
         if (!ready(eye)) {
             throw new IllegalStateException(
-                "Build a ray cache around your position first"
+                "The opacity cache is not ready at this location"
             );
         }
 
-        if (radius < 1
-            || radius > MAX_SEARCH_RADIUS_CHUNKS) {
-            throw new IllegalArgumentException(
-                "Invalid search radius: " + radius
-            );
+        if (radius < 1 || radius > MAX_SEARCH_RADIUS_CHUNKS) {
+            throw new IllegalArgumentException("Invalid search radius: " + radius);
         }
 
         long preparationStarted = prepProfiler.begin();
 
         try {
-            UUID worldId = eye.getWorld().getUID();
+            World world = eye.getWorld();
+            UUID worldId = world.getUID();
+            var rules = config.rulesFor(world);
+            int nearRevealRadius = rules.nearRevealRadiusBlocks();
+            boolean visibilityMargin = rules.visibilityMargin();
+
             WorldCache cached = worlds.get(worldId);
             long scanGeneration = generation;
             int width = radius * 2 + 1;
@@ -185,54 +197,41 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
 
             var snapshot = new CaveVisRaycast.Snapshot(grid, columns);
             var selected = directions;
-
             long seed = ++sequence * 0x9E3779B97F4A7C15L;
 
             double ex = eye.getX();
             double ey = eye.getY();
             double ez = eye.getZ();
 
-            prepProfiler.stageEnd(
-                CaveVisPrepProfiler.Phase.SNAPSHOT,
-                stageStarted
-            );
-
+            prepProfiler.stageEnd(CaveVisPrepProfiler.Phase.SNAPSHOT, stageStarted);
             stageStarted = prepProfiler.stageStart();
 
-            CompletableFuture<Scan> future =
-                CompletableFuture.supplyAsync(
-                    () -> {
-                        CaveVisRaycast.Run run = CaveVisRaycast.search(
-                            snapshot,
-                            ex, ey, ez,
-                            radius,
-                            selected,
-                            seed,
-                            cancelled
-                        );
+            CompletableFuture<Scan> future = CompletableFuture.supplyAsync(
+                () -> {
+                    CaveVisRaycast.Run run = CaveVisRaycast.search(
+                        snapshot,
+                        ex, ey, ez,
+                        radius,
+                        selected,
+                        seed,
+                        nearRevealRadius,
+                        profileScan,
+                        cancelled
+                    );
 
-                        CaveVisVisibility visibility = new CaveVisVisibility(
-                            worldId,
-                            grid,
-                            run.result().sections()
-                        );
+                    CaveVisVisibility visibility = new CaveVisVisibility(
+                        worldId,
+                        grid,
+                        run.result().sections(),
+                        visibilityMargin
+                    );
 
-                        return new Scan(
-                            scanGeneration,
-                            grid,
-                            run,
-                            visibility,
-                            snapshot
-                        );
-                    },
-                    rays
-                );
-
-            prepProfiler.stageEnd(
-                CaveVisPrepProfiler.Phase.SUBMIT,
-                stageStarted
+                    return new Scan(scanGeneration, grid, run, visibility, snapshot);
+                },
+                rays
             );
 
+            prepProfiler.stageEnd(CaveVisPrepProfiler.Phase.SUBMIT, stageStarted);
             return future;
         } finally {
             prepProfiler.end(preparationStarted);
@@ -256,47 +255,42 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
         int centerChunkZ,
         int radius
     ) {
+        String worldName = world.getName();
+        if (!config.enabled(world)) {
+            throw new IllegalArgumentException(
+                "CaveVis is disabled in world " + worldName
+            );
+        }
+
         if (build != null) {
             throw new IllegalStateException(
-                "A build is running; use /cavevis raycancel"
+                "A build is running; use /cavevis cancel"
             );
         }
 
-        if (radius < 1
-            || radius > MAX_BUILD_RADIUS_CHUNKS) {
+        if (radius < 1 || radius > MAX_BUILD_RADIUS_CHUNKS) {
             throw new IllegalArgumentException(
-                "Build radius must be 1.."
-                    + MAX_BUILD_RADIUS_CHUNKS
+                "Build radius must be 1.." + MAX_BUILD_RADIUS_CHUNKS
             );
         }
 
+        var rules = config.rulesFor(world);
         int bottom = Math.floorDiv(world.getMinHeight(), 16);
-        int cutoff = CaveVisSettings.OCCLUDERS_UP_TO_Y;
-
-        int top = Math.min(
-            Math.floorDiv(world.getMaxHeight(), 16),
-            Math.floorDiv(cutoff + 15, 16)
-        );
-
-        int visibleTop = Math.min(
-            Math.floorDiv(world.getMaxHeight(), 16),
-            CaveVisSettings.alwaysVisibleSection()
-        );
-
-        if (top < visibleTop) {
-            throw new IllegalArgumentException(
-                "Occluder height must reach at least the always-visible height"
-            );
-        }
+        int worldTop = Math.floorDiv(world.getMaxHeight(), 16);
+        int top = Math.min(worldTop, rules.occluderTopSection());
 
         int diameter = radius * 2 + 1;
         int height = top - bottom;
 
-        if (height <= 0
-            || 512L * diameter * diameter * height
-            > MAX_RAW_SNAPSHOT_BYTES) {
+        if (height <= 0) {
             throw new IllegalArgumentException(
-                "Invalid cutoff or raw snapshots exceed MAX_RAW_SNAPSHOT_BYTES"
+                "CaveVis occluder height must be above the minimum height of " + worldName
+            );
+        }
+
+        if (512L * diameter * diameter * height > MAX_RAW_SNAPSHOT_BYTES) {
+            throw new IllegalArgumentException(
+                "Raw opacity snapshots exceed the build memory limit"
             );
         }
 
@@ -531,7 +525,7 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
 
     private void captureLoadedColumn(CaveVisCaptureQueue.Column request) {
         World world = Bukkit.getWorld(request.worldId());
-        if (world == null) {
+        if (world == null || !config.enabled(world)) {
             return;
         }
 
@@ -542,11 +536,10 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
             return;
         }
 
+        var rules = config.rulesFor(world);
         int bottom = Math.floorDiv(world.getMinHeight(), 16);
-        int top = Math.min(
-            Math.floorDiv(world.getMaxHeight(), 16),
-            Math.floorDiv(CaveVisSettings.OCCLUDERS_UP_TO_Y + 15, 16)
-        );
+        int worldTop = Math.floorDiv(world.getMaxHeight(), 16);
+        int top = Math.min(worldTop, rules.occluderTopSection());
         int height = top - bottom;
         if (height <= 0) {
             return;
@@ -1083,6 +1076,8 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
     @EventHandler(priority = EventPriority.MONITOR)
     public void onChunkLoad(ChunkLoadEvent event) {
         World world = event.getWorld();
+        if (!config.enabled(world)) return;
+
         int x = event.getChunk().getX();
         int z = event.getChunk().getZ();
         UUID worldId = world.getUID();
@@ -1189,11 +1184,15 @@ public final class CaveVisRayCache implements AutoCloseable, Listener {
             ? stopBuild()
             : null;
 
-        WorldCache cached = worlds.get(worldId);
-        if (cached != null) {
-            cached.columns.values().removeIf(column -> !column.retained);
-            if (cached.columns.isEmpty()) {
-                worlds.remove(worldId);
+        if (config.removeTemporaryWorld(worldId)) {
+            worlds.remove(worldId);
+        } else {
+            WorldCache cached = worlds.get(worldId);
+            if (cached != null) {
+                cached.columns.values().removeIf(column -> !column.retained);
+                if (cached.columns.isEmpty()) {
+                    worlds.remove(worldId);
+                }
             }
         }
 

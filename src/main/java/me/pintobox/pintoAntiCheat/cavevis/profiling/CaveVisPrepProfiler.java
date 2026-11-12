@@ -21,12 +21,16 @@ public final class CaveVisPrepProfiler {
     private int cursor;
     private int count;
 
-    private boolean enabled = true;
+    private boolean enabled;
     private boolean recording;
 
-    public boolean toggle() {
-        enabled = !enabled;
+    public void setEnabled(boolean enabled) {
+        this.enabled = enabled;
         reset();
+    }
+
+    public boolean toggle() {
+        setEnabled(!enabled);
         return enabled;
     }
 

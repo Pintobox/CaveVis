@@ -34,11 +34,14 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
     private final Set<UUID> pendingScans = new LinkedHashSet<>();
     private final CaveVisMainProfiler mainProfiler = new CaveVisMainProfiler();
 
+    private CaveVisConfiguration config;
     private CaveVisRayCache cache;
     private CaveVisTerrainDelivery terrain;
     private CaveVisEntityVisibility entities;
     private BukkitTask tickTask;
     private long ticks;
+
+    private int profilingPlayers;
 
     public CaveVis(JavaPlugin plugin) {
         this.plugin = plugin;
@@ -46,15 +49,16 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
 
     public void start() {
         CaveVisSettings.validate();
+        config = CaveVisConfiguration.load(plugin);
 
         PluginCommand command = Objects.requireNonNull(
             plugin.getCommand("cavevis"),
             "Missing cavevis command in plugin.yml"
         );
 
-        cache = new CaveVisRayCache(plugin);
-        terrain = new CaveVisTerrainDelivery(plugin);
-        entities = new CaveVisEntityVisibility(plugin, terrain);
+        cache = new CaveVisRayCache(plugin, config);
+        terrain = new CaveVisTerrainDelivery(plugin, config);
+        entities = new CaveVisEntityVisibility(plugin, terrain, config);
 
         CaveVisCommands commands = new CaveVisCommands(this);
         command.setExecutor(commands);
@@ -98,6 +102,33 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
         if (closingCache != null) {
             closingCache.close();
         }
+    }
+
+    @Override
+    public void enableTemporaryWorld(World world, WorldRules rules) {
+        if (!Bukkit.isPrimaryThread()) {
+            throw new IllegalStateException(
+                "Call CaveVis.enableTemporaryWorld on the server thread"
+            );
+        }
+
+        if (cache == null) {
+            throw new IllegalStateException("CaveVis is not running");
+        }
+
+        if (world == null || Bukkit.getWorld(world.getUID()) != world) {
+            throw new IllegalArgumentException("The temporary world must be loaded");
+        }
+
+        if (!world.getPlayers().isEmpty()) {
+            throw new IllegalStateException(
+                "Enable CaveVis before players enter " + world.getName()
+            );
+        }
+
+        config.enableTemporaryWorld(world, rules);
+        terrain.refreshWorldPolicy(world);
+        cache.queueLoadedChunks(world);
     }
 
     @Override
@@ -147,6 +178,35 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
         cache.releasePreloaded(Objects.requireNonNull(worldId, "worldId"));
     }
 
+    @Override
+    public boolean hasReceivedSection(
+        Player viewer, int sectionX, int sectionY, int sectionZ
+    ) {
+        requireVisibilityQueryThread();
+
+        return cache != null
+            && terrain.hasReceivedSection(viewer, sectionX, sectionY, sectionZ);
+    }
+
+    @Override
+    public ReceivedSections getReceivedSections(Player viewer) {
+        requireVisibilityQueryThread();
+
+        if (cache == null) {
+            return new ReceivedSections(viewer.getWorld().getUID(), List.of());
+        }
+
+        return terrain.getReceivedSections(viewer);
+    }
+
+    private static void requireVisibilityQueryThread() {
+        if (!Bukkit.isPrimaryThread()) {
+            throw new IllegalStateException(
+                "CaveVis visibility queries must run on the server thread"
+            );
+        }
+    }
+
     void build(CommandSender sender, Player player, int radius) {
         cache.start(sender, player.getLocation(), radius);
     }
@@ -160,60 +220,33 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
         pendingScans.clear();
     }
 
-    void setRays(int count) {
-        cache.setRays(count);
-    }
-
-    void requestScan(Player player) {
-        if (!cache.ready(player.getEyeLocation())) {
-            throw new IllegalStateException(
-                "Finish /cavevis raybuild around your position first"
-            );
-        }
-
-        UUID playerId = player.getUniqueId();
-        Session session = sessions.computeIfAbsent(
-            playerId, id -> new Session(player)
-        );
-        cancel(session);
-
-        session.automatic = true;
-        session.notice = true;
-        session.failures = 0;
-        session.retryAtTick = 0;
-        session.force = true;
-
-        pendingScans.add(playerId);
-    }
-
     String profile(Player player, String action) {
         Session session = sessions.computeIfAbsent(
             player.getUniqueId(), id -> new Session(player)
         );
 
         switch (action) {
-            case "on" -> session.display = true;
+            case "on" -> setProfiling(session, true);
             case "off" -> {
-                session.display = false;
+                setProfiling(session, false);
                 player.sendActionBar(Component.empty());
             }
             case "reset" -> {
                 session.stats = new Stats();
+                session.profileScan = false;
+                session.preparationNanos = 0L;
                 mainProfiler.reset();
                 cache.preparationProfile().reset();
             }
             case "detail" -> {
+                if (!session.display) {
+                    return "Use /cavevis profile on before enabling detailed timings.";
+                }
                 boolean enabled = cache.preparationProfile().toggle();
                 return "Detailed preparation timings: " + (enabled ? "ON" : "OFF");
             }
-            case "toggle" -> {
-                session.display = !session.display;
-                if (!session.display) {
-                    player.sendActionBar(Component.empty());
-                }
-            }
             default -> throw new IllegalArgumentException(
-                "Usage: /cavevis profile [on|off|reset|detail|toggle]"
+                "Usage: /cavevis profile <on|off|reset|detail>"
             );
         }
 
@@ -223,6 +256,9 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
 
     List<String> stats(CommandSender sender, boolean tickStats) {
         if (tickStats) {
+            if (profilingPlayers == 0) {
+                return List.of("Tick profiling is off. Use /cavevis profile on.");
+            }
             return List.of(
                 mainProfiler.summary(),
                 mainProfiler.breakdown(),
@@ -251,18 +287,43 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
         return lines;
     }
 
+    private void setProfiling(Session session, boolean enabled) {
+        if (session.display == enabled) return;
+
+        session.display = enabled;
+        session.stats = new Stats();
+        session.profileScan = false;
+        session.preparationNanos = 0;
+
+        profilingPlayers += enabled ? 1 : -1;
+        if (profilingPlayers == 0) {
+            mainProfiler.reset();
+            cache.preparationProfile().setEnabled(false);
+        }
+    }
+
+    private long startPhaseTiming() {
+        return profilingPlayers > 0 ? System.nanoTime() : 0L;
+    }
+
+    private void finishPhaseTiming(CaveVisMainProfiler.Phase phase, long started) {
+        if (started != 0L && profilingPlayers > 0) {
+            mainProfiler.add(phase, System.nanoTime() - started);
+        }
+    }
+
     private void tick() {
-        long tickStarted = System.nanoTime();
-        mainProfiler.beginTick();
+        long tickStarted = startPhaseTiming();
+        if (tickStarted != 0L) {
+            mainProfiler.beginTick();
+        }
 
         try {
             ticks++;
 
-            long phaseStarted = System.nanoTime();
+            long phaseStarted = startPhaseTiming();
             cache.tick();
-            mainProfiler.add(
-                CaveVisMainProfiler.Phase.CACHE, System.nanoTime() - phaseStarted
-            );
+            finishPhaseTiming(CaveVisMainProfiler.Phase.CACHE, phaseStarted);
 
             int interval = Math.max(1, CaveVisSettings.SEARCH_INTERVAL_TICKS);
 
@@ -277,7 +338,6 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
                     s.world = player.getWorld().getUID();
                     s.stats = new Stats();
                     s.force = s.automatic;
-                    s.notice = false;
                     s.failures = 0;
                     s.retryAtTick = 0;
                 }
@@ -289,7 +349,6 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
 
                     s.cacheGeneration = generation;
                     s.stats = new Stats();
-                    s.notice = s.notice && pendingScans.contains(entry.getKey());
                     s.failures = 0;
                     s.retryAtTick = 0;
 
@@ -303,7 +362,6 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
                     cancel(s);
 
                     s.stats = new Stats();
-                    s.notice = false;
                     s.automatic = true;
                     s.force = true;
                     s.failures = 0;
@@ -322,42 +380,30 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
 
                             var run = scan.run();
 
-                            s.stats.add(
-                                run.result().nanos(),
-                                s.preparationNanos,
-                                run.result().sections().cardinality()
-                            );
+                            if (s.profileScan) {
+                                s.stats.add(
+                                    run.result().nanos(),
+                                    s.preparationNanos,
+                                    run.result().sections().cardinality()
+                                );
+                            }
 
                             if (s.scanChunkX == (player.getLocation().getBlockX() >> 4)
                                 && s.scanChunkZ == (player.getLocation().getBlockZ() >> 4)
                                 && s.scanSectionY == (player.getLocation().getBlockY() >> 4)
                                 && player.getWorld().getUID().equals(s.scanWorld)) {
 
-                                long publishStarted = System.nanoTime();
+                                long publishStarted = startPhaseTiming();
                                 try {
                                     terrain.publish(player, scan, s.terrainVersion);
                                 } finally {
-                                    mainProfiler.add(
+                                    finishPhaseTiming(
                                         CaveVisMainProfiler.Phase.PUBLISH,
-                                        System.nanoTime() - publishStarted
+                                        publishStarted
                                     );
                                 }
                             } else {
                                 s.force = true;
-                            }
-
-                            if (s.notice) {
-                                message(player,
-                                    s.stats.text()
-                                        + " | " + run.voxels()
-                                        + " voxel visits | "
-                                        + s.stats.sections
-                                        + " approved 16^3 sections"
-                                        + String.format(
-                                        Locale.ROOT,
-                                        " | prep %.3f ms/scan",
-                                        s.preparationNanos / 1e6
-                                    ));
                             }
                         }
                     } catch (RuntimeException e) {
@@ -365,7 +411,6 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
                     }
 
                     s.future = null;
-                    s.notice = false;
                 }
 
                 if ((s.automatic || s.force)
@@ -393,19 +438,17 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
 
             startQueuedScans();
 
-            phaseStarted = System.nanoTime();
+            phaseStarted = startPhaseTiming();
             terrain.tick();
-            mainProfiler.add(
-                CaveVisMainProfiler.Phase.DELIVERY, System.nanoTime() - phaseStarted
-            );
+            finishPhaseTiming(CaveVisMainProfiler.Phase.DELIVERY, phaseStarted);
 
-            phaseStarted = System.nanoTime();
+            phaseStarted = startPhaseTiming();
             entities.tick();
-            mainProfiler.add(
-                CaveVisMainProfiler.Phase.ENTITIES, System.nanoTime() - phaseStarted
-            );
+            finishPhaseTiming(CaveVisMainProfiler.Phase.ENTITIES, phaseStarted);
         } finally {
-            mainProfiler.endTick(System.nanoTime() - tickStarted);
+            if (tickStarted != 0L && profilingPlayers > 0) {
+                mainProfiler.endTick(System.nanoTime() - tickStarted);
+            }
         }
     }
 
@@ -415,7 +458,9 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
             return;
         }
 
-        long started = System.nanoTime();
+        session.profileScan = session.display;
+        session.preparationNanos = 0L;
+        long started = startPhaseTiming();
 
         try {
             session.cancelled = new AtomicBoolean();
@@ -430,7 +475,8 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
 
             session.future = cache.search(
                 player.getEyeLocation(),
-                CaveVisSettings.SEARCH_RADIUS_CHUNKS,
+                config.rulesFor(player.getWorld()).searchRadiusChunks(),
+                session.profileScan,
                 session.cancelled
             );
 
@@ -440,10 +486,13 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
         } catch (RuntimeException failure) {
             scanFailed(player, session, failure);
         } finally {
-            session.preparationNanos = System.nanoTime() - started;
-            mainProfiler.add(
-                CaveVisMainProfiler.Phase.PREPARE, session.preparationNanos
-            );
+            if (started != 0L && profilingPlayers > 0) {
+                long elapsed = System.nanoTime() - started;
+                if (session.profileScan) {
+                    session.preparationNanos = elapsed;
+                }
+                mainProfiler.add(CaveVisMainProfiler.Phase.PREPARE, elapsed);
+            }
         }
     }
 
@@ -453,7 +502,7 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
         int starts = 0;
         var requests = pendingScans.iterator();
 
-        while (starts < CaveVisSettings.SCAN_STARTS_PER_TICK && requests.hasNext()) {
+        while (starts < config.scanStartsPerTick && requests.hasNext()) {
             UUID playerId = requests.next();
             Session session = sessions.get(playerId);
             Player player = Bukkit.getPlayer(playerId);
@@ -540,7 +589,10 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
         UUID playerId = event.getPlayer().getUniqueId();
         Session session = sessions.remove(playerId);
 
-        if (session != null) cancel(session);
+        if (session != null) {
+            setProfiling(session, false);
+            cancel(session);
+        }
         pendingScans.remove(playerId);
     }
 
@@ -551,12 +603,16 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
         }
     }
 
+    int defaultPreloadRadius() {
+        return config.defaultPreloadRadius;
+    }
+
     private static final class Session {
         UUID world;
         boolean automatic;
-        boolean display = true;
+        boolean display;
+        boolean profileScan;
         boolean force;
-        boolean notice;
         long lastScan;
         long terrainVersion;
         long preparationNanos;

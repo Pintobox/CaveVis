@@ -1,6 +1,5 @@
 package me.pintobox.pintoAntiCheat.cavevis.visibility;
 
-import me.pintobox.pintoAntiCheat.cavevis.core.CaveVisSettings;
 import me.pintobox.pintoAntiCheat.cavevis.cache.CaveVisRayCache;
 
 import java.util.BitSet;
@@ -50,9 +49,11 @@ public final class CaveVisRaycast {
         int radius,
         Directions directions,
         long seed,
+        int nearRevealRadiusBlocks,
+        boolean profileScan,
         AtomicBoolean cancelled
     ) {
-        long begin = System.nanoTime();
+        long begin = profileScan ? System.nanoTime() : 0L;
         check(cancelled);
 
         CaveVisRayData.Grid g = snapshot.grid();
@@ -83,22 +84,24 @@ public final class CaveVisRaycast {
         double y0 = g.bottom * 16.0;
         double y1 = (g.bottom + g.height) * 16.0;
 
-        double safety = Math.max(
-            0,
-            CaveVisSettings.NEAR_REVEAL_RADIUS_BLOCKS
-        );
+        double safety = nearRevealRadiusBlocks;
 
-        for (int z = (int) Math.floor((ez - safety) / 16);
-             z <= (int) Math.floor((ez + safety) / 16); z++) {
-            for (int x = (int) Math.floor((ex - safety) / 16);
-                 x <= (int) Math.floor((ex + safety) / 16); x++) {
-                for (int y = (int) Math.floor((ey - safety) / 16);
-                     y <= (int) Math.floor((ey + safety) / 16); y++) {
-                    int owner = g.index(x, y, z);
+        int minX = Math.max(g.minX, (int) Math.floor((ex - safety) / 16));
+        int maxX = Math.min(g.minX + g.diameter - 1,
+            (int) Math.floor((ex + safety) / 16));
 
-                    if (owner >= 0) {
-                        approved.set(owner);
-                    }
+        int minY = Math.max(g.bottom, (int) Math.floor((ey - safety) / 16));
+        int maxY = Math.min(g.bottom + g.height - 1,
+            (int) Math.floor((ey + safety) / 16));
+
+        int minZ = Math.max(g.minZ, (int) Math.floor((ez - safety) / 16));
+        int maxZ = Math.min(g.minZ + g.diameter - 1,
+            (int) Math.floor((ez + safety) / 16));
+
+        for (int z = minZ; z <= maxZ; z++) {
+            for (int x = minX; x <= maxX; x++) {
+                for (int y = minY; y <= maxY; y++) {
+                    approved.set(g.index(x, y, z));
                 }
             }
         }
@@ -370,7 +373,7 @@ public final class CaveVisRaycast {
         return new Run(
             new CaveVisRayData.Result(
                 approved,
-                System.nanoTime() - begin
+                profileScan ? System.nanoTime() - begin : 0L
             ),
             voxels,
             hits,

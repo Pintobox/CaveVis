@@ -2,6 +2,8 @@ package me.pintobox.pintoAntiCheat.cavevis.delivery;
 
 import io.papermc.paper.event.player.PlayerTrackEntityEvent;
 import java.util.*;
+
+import me.pintobox.pintoAntiCheat.cavevis.core.CaveVisConfiguration;
 import me.pintobox.pintoAntiCheat.cavevis.core.CaveVisSettings;
 import net.minecraft.server.level.ChunkMap;
 import net.minecraft.world.phys.AABB;
@@ -19,16 +21,19 @@ public final class CaveVisEntityVisibility
 
     private final JavaPlugin plugin;
     private final CaveVisTerrainDelivery terrain;
+    private final CaveVisConfiguration config;
     private final Map<UUID, Watch> watches = new HashMap<>();
 
     private int ticks;
 
     public CaveVisEntityVisibility(
         JavaPlugin plugin,
-        CaveVisTerrainDelivery terrain
+        CaveVisTerrainDelivery terrain,
+        CaveVisConfiguration config
     ) {
         this.plugin = plugin;
         this.terrain = terrain;
+        this.config = config;
 
         Bukkit.getPluginManager().registerEvents(this, plugin);
     }
@@ -41,9 +46,9 @@ public final class CaveVisEntityVisibility
         Entity entity = event.getEntity();
         Player viewer = event.getPlayer();
 
-        if (!CaveVisSettings.ENTITY_CULLING_ENABLED
-            || entity instanceof Player
-            || !terrain.active(viewer)) {
+        if (entity instanceof Player
+            || !terrain.active(viewer)
+            || !config.rulesFor(viewer.getWorld()).entityCulling()) {
             return;
         }
 
@@ -99,8 +104,8 @@ public final class CaveVisEntityVisibility
         ticks = 0;
 
         for (Player viewer : Bukkit.getOnlinePlayers()) {
-            if (!CaveVisSettings.ENTITY_CULLING_ENABLED
-                || !terrain.active(viewer)) {
+            if (!terrain.active(viewer)
+                || !config.rulesFor(viewer.getWorld()).entityCulling()) {
                 Watch old = watches.remove(viewer.getUniqueId());
 
                 if (old != null) {

@@ -1,10 +1,9 @@
 package me.pintobox.pintoAntiCheat.cavevis.delivery;
 
+import me.pintobox.pintoAntiCheat.cavevis.visibility.CaveVisRayData;
+
 import java.util.BitSet;
 import java.util.UUID;
-
-import me.pintobox.pintoAntiCheat.cavevis.core.CaveVisSettings;
-import me.pintobox.pintoAntiCheat.cavevis.visibility.CaveVisRayData;
 
 public final class CaveVisVisibility {
     public final UUID world;
@@ -15,13 +14,14 @@ public final class CaveVisVisibility {
     public CaveVisVisibility(
         UUID world,
         CaveVisRayData.Grid grid,
-        BitSet sections
+        BitSet sections,
+        boolean visibilityMargin
     ) {
         this.world = world;
         this.grid = grid;
         this.sections = (BitSet) sections.clone();
 
-        if (!CaveVisSettings.VISIBILITY_MARGIN_ENABLED) {
+        if (!visibilityMargin) {
             return;
         }
 

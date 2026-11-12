@@ -25,43 +25,30 @@ final class CaveVisCommands implements CommandExecutor, TabCompleter {
             String sub = args.length == 0 ? "help" : args[0].toLowerCase(Locale.ROOT);
 
             switch (sub) {
-                case "raybuild" -> {
+                case "build" -> {
                     Player player = player(sender);
                     int radius = args.length > 1
                         ? Integer.parseInt(args[1])
-                        : CaveVisSettings.DEFAULT_BUILD_RADIUS_CHUNKS;
+                        : caveVis.defaultPreloadRadius();
                     caveVis.build(sender, player, radius);
                 }
-                case "raycancel" -> {
+                case "cancel" -> {
                     caveVis.cancelBuild();
                     message(sender, "Build cancelled; previous cache retained.");
                 }
-                case "rayclear" -> {
+                case "clear" -> {
                     caveVis.clear();
                     message(sender, "Ray cache cleared; terrain filtering remains active.");
                 }
-                case "raycount" -> {
+                case "profile" -> {
                     if (args.length != 2) {
                         throw new IllegalArgumentException(
-                            "Usage: /cavevis raycount <" + CaveVisRayCache.MIN_RAYS
-                                + ".." + CaveVisRayCache.MAX_RAYS + ">"
+                            "Usage: /cavevis profile <on|off|reset|detail>"
                         );
                     }
 
-                    int count = Integer.parseInt(args[1]);
-                    caveVis.setRays(count);
-                    message(sender, "Rays per scan: " + count);
-                }
-                case "scan" -> {
-                    caveVis.requestScan(player(sender));
-                    message(sender, "Ray scan queued.");
-                }
-                case "profile" -> {
-                    Player player = player(sender);
-                    String action = args.length > 1
-                        ? args[1].toLowerCase(Locale.ROOT)
-                        : "toggle";
-                    message(sender, caveVis.profile(player, action));
+                    String action = args[1].toLowerCase(Locale.ROOT);
+                    message(sender, caveVis.profile(player(sender), action));
                 }
                 case "raystats" -> {
                     boolean tickStats = args.length > 1;
@@ -73,9 +60,8 @@ final class CaveVisCommands implements CommandExecutor, TabCompleter {
                     }
                 }
                 default -> message(sender,
-                    "/cavevis raybuild <radius> | raycancel | rayclear "
-                        + "| raycount <count> | scan "
-                        + "| profile [on|off|reset|detail|toggle] | raystats [tick]");
+                    "/cavevis build [radius] | cancel | clear "
+                        + "| profile <on|off|reset|detail> | raystats [tick]");
             }
         } catch (IllegalArgumentException | IllegalStateException e) {
             message(sender, e.getMessage());
@@ -91,13 +77,9 @@ final class CaveVisCommands implements CommandExecutor, TabCompleter {
         if (args.length == 0) return List.of();
 
         List<String> options = args.length == 1
-            ? List.of(
-            "raybuild", "raycancel", "rayclear",
-            "raycount", "scan",
-            "profile", "raystats"
-        )
+            ? List.of("build", "cancel", "clear", "profile", "raystats")
             : args.length == 2 && args[0].equalsIgnoreCase("profile")
-            ? List.of("on", "off", "reset", "detail", "toggle")
+            ? List.of("on", "off", "reset", "detail")
             : args.length == 2 && args[0].equalsIgnoreCase("raystats")
             ? List.of("tick")
             : List.of();

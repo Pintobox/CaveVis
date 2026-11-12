@@ -1,0 +1,53 @@
+cavevis:
+  # Bukkit world names. Change "world" if your overworld has a different name.
+  # Use [] to leave CaveVis disabled in every world.
+  enabled-worlds:
+    - world
+
+  server:
+    # Rays cast for each visibility scan.
+    rays-per-scan: 2048
+
+    # Worker threads shared by all enabled worlds.
+    ray-workers: 2
+
+    # Maximum new scans the server starts per tick across all players.
+    scan-starts-per-tick: 6
+
+    # Radius used when /cavevis build is called without a number.
+    # Radius 16 covers 33 x 33 chunk columns.
+    default-preload-radius-chunks: 16
+
+  world-defaults:
+    # Terrain at this block Y and above is always sent. Use a multiple of 16.
+    always-visible-from-y: 48
+
+    # Exclusive upper Y for blocks that can stop rays. Use a multiple of 16
+    # at or above always-visible-from-y.
+    occluders-up-to-y: 64
+
+    # Horizontal scan radius in chunks aka server render distance.
+    search-radius-chunks: 10
+
+    # Radius around the player's eyes used to reveal nearby whole sections.
+    # Range: 0..32 blocks. At 0, the section containing the player's eyes
+    # is still eligible for near reveal.
+    near-reveal-radius-blocks: 8
+
+    # Reveal face-adjacent sections to reduce pop-in around corners.
+    visibility-margin: true
+
+    # Filter non-player entities and particle effects in hidden sections.
+    entity-culling: true
+    particle-culling: true
+
+  # Optional overrides. Omitted keys inherit from world-defaults.
+  # Add a world to enabled-worlds to enable CaveVis there.
+  #
+  # worlds:
+  #   world_nether:
+  #     always-visible-from-y: 80
+  #     occluders-up-to-y: 96
+  #   custom_dimension:
+  #     search-radius-chunks: 8
+  #     visibility-margin: false

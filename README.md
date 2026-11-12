@@ -29,26 +29,56 @@ compiles against that bundle and runs against the custom server JAR.
 
 ## Demo
 
-1. Join the server. CaveVis filters terrain automatically from the first chunk packet.
+1. Join a world where CaveVis is enabled. CaveVis filters terrain automatically from the first chunk packet.
 2. Walk into a cave. Nearby terrain and sections approved by visibility scans appear as you move.
-3. Optionally run `/cavevis raybuild 16` to preload opacity data around your position.
-   Preloaded data survives chunk unloads until `/cavevis rayclear` releases it.
+3. Optionally run `/cavevis build 16` to preload opacity data around your position.
+   Preloaded data survives chunk unloads until `/cavevis clear` releases it.
 
-## Preloading from another plugin
+## Using CaveVis from another plugin
 
 Add PintoAntiCheat as a `compileOnly` dependency and declare
 `depend: [PintoAntiCheat]` in your plugin's `plugin.yml`.
 
-Call the API on the server thread. The coordinates are chunk coordinates,
-and radius 16 covers a 33 × 33 square of chunk columns.
+Import `me.pintobox.pintoAntiCheat.cavevis.api.CaveVisApi` and call the API
+on the server thread.
 
 ```java
 CaveVisApi caveVis = Bukkit.getServicesManager().load(CaveVisApi.class);
 if (caveVis == null) {
     throw new IllegalStateException("CaveVis API is unavailable");
 }
+```
 
-caveVis.preload(world, centerChunkX, centerChunkZ, 16)
+### Enable a temporary world
+
+After creating or loading an arena world, call `enableTemporaryWorld()` before
+teleporting any players into it. The world must be outside
+`cavevis.enabled-worlds` and can be enabled once per load.
+
+```java
+var rules = new CaveVisApi.WorldRules(
+    48,    // Always-visible block Y, inclusive
+    64,    // Occluder block Y, exclusive
+    10,    // Scan radius in chunks
+    8,     // Near-reveal radius in blocks
+    true,  // Visibility margin
+    true,  // Entity culling
+    true   // Particle culling
+);
+caveVis.enableTemporaryWorld(arenaWorld, rules);
+```
+
+The rules stay in memory until the world unloads. Unloading also drops that
+world's preloaded opacity. Call `enableTemporaryWorld()` again if you reload it.
+
+### Optionally preload opacity
+
+Preload in a world enabled through YAML or immediately after calling
+`enableTemporaryWorld()`. The center uses chunk coordinates. A radius of 16
+covers a 33 × 33 square of chunk columns.
+
+```java
+caveVis.preload(arenaWorld, centerChunkX, centerChunkZ, 16)
     .whenComplete((ignored, error) -> {
         if (error != null) {
             getLogger().warning("CaveVis preload failed: " + error);
@@ -59,17 +89,16 @@ caveVis.preload(world, centerChunkX, centerChunkZ, 16)
     });
 ```
 
-Import `me.pintobox.pintoAntiCheat.cavevis.api.CaveVisApi`. The future
-completes successfully after CaveVis publishes and pins the opacity data.
-Only one preload runs at a time.
+The future completes successfully after CaveVis publishes and pins the opacity
+data. Only one preload runs at a time.
 
-Save the arena's UUID with `arenaWorld.getUID()`. At match teardown, call
-`caveVis.releasePreloaded(arenaWorldId)` on the server thread. This cancels
-any active preload for that world and releases its pins. You can call it
-after the world unloads. Chunks that are still loaded stay cached until
-they unload, and preloads in other worlds stay pinned.
+To release a world's pins while keeping it loaded, call
+`caveVis.releasePreloaded(arenaWorld.getUID())` on the server thread. This also
+cancels any active preload for that world. Loaded chunks stay cached until
+they unload. For a YAML-enabled world, you can also release its pins after
+it unloads by passing its saved UUID.
 
-`/cavevis rayclear` releases preload pins across all worlds.
+`/cavevis clear` releases preload pins across all worlds.
 
 ## How CaveVis works
 
@@ -83,8 +112,8 @@ an array snapshot around the player, and rays stop at columns whose opacity
 data is unavailable.
 
 Worker threads cast rays from the player's eye position through this grid.
-When a 16×16×16 section contains no opaque cells, a ray can skip the
-individual cell checks and jump to the section boundary.
+In a 16×16×16 section with no opaque cells, rays continue stepping through
+the grid and skip the opacity checks.
 
 The scan identifies sections to reveal. The server uses that result to
 filter the chunk data it sends to each player.
@@ -98,36 +127,15 @@ filter the chunk data it sends to each player.
 
 ## Configuration
 
-Edit `CaveVisSettings.java`, then rebuild the plugin and restart the server.
+Edit `plugins/PintoAntiCheat/config.yml` and restart the server.
+CaveVis automatically enables the worlds listed under `cavevis.enabled-worlds`.
+The default list contains `world`. Another plugin can also enable a temporary
+world through the API.
 
-Both height settings must be multiples of 16. At the defaults, terrain at
-Y=48 and above stays visible while filtering is active. Blocks from Y=48
-through Y=63 can still stop rays, so a visible section can block the view
-of a hidden cave.
+Server-wide settings are under `cavevis.server`. Visibility rules are under
+`cavevis.world-defaults`. To customize an enabled world, add its name under
+`cavevis.worlds` and specify the settings you want to override. Omitted
+settings inherit the world defaults.
 
-| Setting | Default | What it controls |
-| --- | ---: | --- |
-| `ALWAYS_VISIBLE_FROM_Y` | 48 | Lowest block Y that always stays visible while filtering is active. |
-| `OCCLUDERS_UP_TO_Y` | 64 | Exclusive upper Y limit for blocks that can stop visibility rays. |
-| `ENTITY_CULLING_ENABLED` | `true` | Enables filtering of entities in terrain sections the player hasn't received. |
-| `PARTICLE_CULLING_ENABLED` | `true` | Enables filtering of particle effects originating in hidden sections. |
-| `ENTITY_VISIBILITY_INTERVAL_TICKS` | 5 | How often entity visibility is refreshed, about four times per second at 20 TPS. |
-| `DEFAULT_RAYS` | 2048 | Rays per scan. More rays sample more directions and take more CPU time. |
-| `RAY_WORKERS` | 2 | Number of worker threads available to run ray scans. |
-| `SCAN_STARTS_PER_TICK` | 6 | Maximum number of queued scans the server can start in one tick, shared across players. |
-| `SEARCH_RADIUS_CHUNKS` | 10 | Horizontal search radius in chunks. Scans use the available data in the available opacity cache. |
-| `SEARCH_INTERVAL_TICKS` | 20 | Normal interval between automatic scans. Movement or terrain updates can request one sooner. |
-| `SEARCH_RETRY_DELAY_TICKS` | 20 | Initial wait before retrying a failed scan. Repeated failures increase the wait. |
-| `DEFAULT_BUILD_RADIUS_CHUNKS` | 16 | Radius used when `/cavevis raybuild` is called without a number. Radius 16 covers 33 × 33 chunk columns. |
-| `BUILD_IN_FLIGHT` | 64 | Maximum number of chunk loads pending or waiting to be captured during a build. |
-| `BUILD_BUDGET_MS` | 16.0 | Target server-thread time per tick for loading and capturing chunks during a build. |
-| `EDIT_BUDGET_MS` | 1.0 | Target server-thread time per tick for processing queued block changes. |
-| `COLUMNS_PER_PLAYER_PER_TICK` | 8 | Maximum chunk columns sent to one player per tick through the normal delivery queue. |
-| `COLUMNS_TOTAL_PER_TICK` | 64 | Maximum chunk columns sent per tick across all players through the normal delivery queue. |
-| `COLUMN_SEND_BUDGET_MS` | 3.0 | Target server-thread time per tick for normal column delivery. |
-| `NEAR_REVEAL_RADIUS_BLOCKS` | 8 | Distance around the player's eyes used to prioritize nearby sections. Whole sections are revealed. |
-| `NEAR_SEND_IMMEDIATELY` | `false` | Lets nearby deliveries bypass the normal column limits and time budget. |
-| `VISIBILITY_MARGIN_ENABLED` | `true` | Adds a one-section margin in the six face directions to reduce terrain pop-in around corners. Set to `false` to use the original raycast mask. |
-
-Time budgets are targets checked between work items. `BUILD_BUDGET_NANOS`
-and `EDIT_BUDGET_NANOS` are calculated from the millisecond settings.
+The bundled `src/main/resources/config.yml` describes each setting and
+includes commented examples of world overrides.

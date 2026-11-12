@@ -8,5 +8,9 @@ description: Server side cave visibility filtering
 commands:
   cavevis:
     description: Control cave visibility and profiling
-  blockplacing:
-    description: Enable or disable block placement server-wide
+    permission: pintoanticheat.admin
+
+permissions:
+  pintoanticheat.admin:
+    description: Allows access to CaveVis administration commands
+    default: op

@@ -5,21 +5,33 @@ import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.papermc.paper.cavevis.CaveVisJoinHook;
+import me.pintobox.pintoAntiCheat.cavevis.api.CaveVisApi;
+import me.pintobox.pintoAntiCheat.cavevis.api.CaveVisApi.ReceivedSections;
+import me.pintobox.pintoAntiCheat.cavevis.api.CaveVisApi.Section;
+import me.pintobox.pintoAntiCheat.cavevis.api.CaveVisApi.WorldRules;
 import me.pintobox.pintoAntiCheat.cavevis.cache.CaveVisRayCache;
+import me.pintobox.pintoAntiCheat.cavevis.core.CaveVisConfiguration;
 import me.pintobox.pintoAntiCheat.cavevis.core.CaveVisSettings;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.*;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.Level;
 import org.bukkit.Bukkit;
+import org.bukkit.World;
+import org.bukkit.craftbukkit.CraftWorld;
 import org.bukkit.craftbukkit.entity.CraftPlayer;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.world.WorldLoadEvent;
+import org.bukkit.event.world.WorldUnloadEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.lang.invoke.MethodHandles;
@@ -27,10 +39,15 @@ import java.lang.invoke.VarHandle;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
-import java.util.logging.Level;
 
 public final class CaveVisTerrainDelivery
     implements Listener, AutoCloseable {
+
+    private final CaveVisConfiguration config;
+    private final Map<ResourceKey<Level>, WorldPolicy> worldPolicies =
+        new ConcurrentHashMap<>();
+
+    private record WorldPolicy(boolean enabled, WorldRules rules) {}
 
     private static final String HANDLER = "pinto_cavevis_columns";
 
@@ -64,8 +81,11 @@ public final class CaveVisTerrainDelivery
 
     private int cursor;
 
-    public CaveVisTerrainDelivery(JavaPlugin plugin) {
+    public CaveVisTerrainDelivery(JavaPlugin plugin, CaveVisConfiguration config) {
         this.plugin = plugin;
+        this.config = config;
+
+        Bukkit.getWorlds().forEach(this::policyFor);
 
         CaveVisJoinHook.register(joinHook);
 
@@ -74,6 +94,30 @@ public final class CaveVisTerrainDelivery
         for (Player player : Bukkit.getOnlinePlayers()) {
             attach(player);
         }
+    }
+
+    private WorldPolicy policyFor(World world) {
+        WorldPolicy policy = new WorldPolicy(
+            config.enabled(world),
+            config.rulesFor(world)
+        );
+
+        worldPolicies.put(((CraftWorld) world).getHandle().dimension(), policy);
+        return policy;
+    }
+
+    public void refreshWorldPolicy(World world) {
+        policyFor(world);
+    }
+
+    @EventHandler
+    public void onWorldLoad(WorldLoadEvent event) {
+        policyFor(event.getWorld());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onWorldUnload(WorldUnloadEvent event) {
+        worldPolicies.remove(((CraftWorld) event.getWorld()).getHandle().dimension());
     }
 
     @EventHandler
@@ -111,8 +155,10 @@ public final class CaveVisTerrainDelivery
             player.getWorld().getUID(), channel
         );
 
-        s.enabled = true;
-        s.active = true;
+        WorldPolicy policy = policyFor(player.getWorld());
+        s.rules = policy.rules();
+        s.enabled = policy.enabled();
+        s.active = s.enabled;
         s.worldTop = Math.floorDiv(player.getWorld().getMaxHeight(), 16);
         s.worldBottom = Math.floorDiv(player.getWorld().getMinHeight(), 16);
 
@@ -264,14 +310,23 @@ public final class CaveVisTerrainDelivery
         });
     }
 
-    private static boolean intercept(State s, Object packet) {
+    private boolean intercept(State s, Object packet) {
         synchronized (s) {
-            if (packet instanceof ClientboundRespawnPacket) {
+            if (packet instanceof ClientboundRespawnPacket respawn) {
                 s.epoch++;
                 s.deliveryRevision++;
 
+                s.pendingDimension = respawn.commonPlayerSpawnInfo().dimension();
+                WorldPolicy destination = worldPolicies.get(s.pendingDimension);
+
                 s.active = false;
-                s.resetPending = s.enabled;
+                s.resetPending = true;
+
+                s.enabled = destination == null || destination.enabled();
+                if (destination != null) {
+                    s.rules = destination.rules();
+                }
+
                 s.accepted = -1;
                 s.visible = null;
 
@@ -320,7 +375,7 @@ public final class CaveVisTerrainDelivery
                 return !blockDelivered(s, destruction.getPos());
             }
 
-            if (CaveVisSettings.PARTICLE_CULLING_ENABLED) {
+            if (s.rules.particleCulling()) {
                 if (packet instanceof ClientboundLevelParticlesPacket particles) {
                     return !positionDelivered(
                         s,
@@ -362,7 +417,7 @@ public final class CaveVisTerrainDelivery
                 return false;
             }
 
-            if (!s.active && !s.resetPending) {
+            if (!s.enabled) {
                 return false;
             }
 
@@ -392,12 +447,20 @@ public final class CaveVisTerrainDelivery
             if (!s.resetPending) return false;
 
             var world = player.getWorld();
+            if (!((CraftWorld) world).getHandle().dimension().equals(s.pendingDimension)) {
+                return false;
+            }
+
             s.world = world.getUID();
             s.worldBottom = Math.floorDiv(world.getMinHeight(), 16);
             s.worldTop = Math.floorDiv(world.getMaxHeight(), 16);
 
-            s.active = true;
+            WorldPolicy policy = policyFor(world);
+            s.rules = policy.rules();
+            s.enabled = policy.enabled();
+            s.active = s.enabled;
             s.resetPending = false;
+            s.pendingDimension = null;
             return true;
         }
     }
@@ -408,7 +471,7 @@ public final class CaveVisTerrainDelivery
         if (s == null) return false;
 
         synchronized (s) {
-            return s.active || s.resetPending;
+            return s.enabled && (s.active || s.resetPending);
         }
     }
 
@@ -476,7 +539,7 @@ public final class CaveVisTerrainDelivery
                     (int) (key >> 32),
                     bottom,
                     height,
-                    CaveVisSettings.alwaysVisibleSection()
+                    s.rules.alwaysVisibleSection()
                 );
 
                 addSafety(s, key, c.wanted, bottom);
@@ -513,6 +576,7 @@ public final class CaveVisTerrainDelivery
 
             s.enabled = false;
             s.resetPending = false;
+            s.pendingDimension = null;
             s.active = false;
             s.visible = null;
 
@@ -621,6 +685,72 @@ public final class CaveVisTerrainDelivery
         }
     }
 
+    public boolean hasReceivedSection(
+        Player viewer, int sectionX, int sectionY, int sectionZ
+    ) {
+        State s = states.get(viewer.getUniqueId());
+        if (s == null) {
+            return false;
+        }
+
+        UUID worldId = viewer.getWorld().getUID();
+
+        synchronized (s) {
+            if (!s.active || s.resetPending || !s.world.equals(worldId)
+                || sectionY < s.worldBottom || sectionY >= s.worldTop) {
+                return false;
+            }
+
+            Column column = s.columns.get(key(sectionX, sectionZ));
+            return column != null
+                && column.sent
+                && column.delivered.get(sectionY - s.worldBottom);
+        }
+    }
+
+    public ReceivedSections getReceivedSections(Player viewer) {
+        UUID worldId = viewer.getWorld().getUID();
+        State s = states.get(viewer.getUniqueId());
+        if (s == null) {
+            return new ReceivedSections(worldId, List.of());
+        }
+
+        synchronized (s) {
+            if (!s.active || s.resetPending || !s.world.equals(worldId)) {
+                return new ReceivedSections(worldId, List.of());
+            }
+
+            if (s.receivedSnapshot != null
+                && s.receivedSnapshotRevision == s.deliveryRevision
+                && s.receivedSnapshot.worldId().equals(worldId)) {
+                return s.receivedSnapshot;
+            }
+
+            List<Section> sections = new ArrayList<>();
+
+            for (var entry : s.columns.entrySet()) {
+                Column column = entry.getValue();
+                if (!column.sent) {
+                    continue;
+                }
+
+                long columnKey = entry.getKey();
+                int x = (int) columnKey;
+                int z = (int) (columnKey >> 32);
+
+                for (int index = column.delivered.nextSetBit(0);
+                     index >= 0;
+                     index = column.delivered.nextSetBit(index + 1)) {
+                    sections.add(new Section(x, s.worldBottom + index, z));
+                }
+            }
+
+            s.receivedSnapshot = new ReceivedSections(worldId, sections);
+            s.receivedSnapshotRevision = s.deliveryRevision;
+            return s.receivedSnapshot;
+        }
+    }
+
     public long deliveryRevision(UUID playerId) {
         State s = states.get(playerId);
 
@@ -693,6 +823,7 @@ public final class CaveVisTerrainDelivery
         int maxY,
         int maxZ
     ) {
+        if (!s.enabled) return true;
         if (s.resetPending) return false;
         if (!s.active) return true;
 
@@ -727,9 +858,7 @@ public final class CaveVisTerrainDelivery
     private void refreshSafety(Player p, State s) {
         var eye = p.getEyeLocation();
 
-        double radius = Math.max(
-            0, CaveVisSettings.NEAR_REVEAL_RADIUS_BLOCKS
-        );
+        double radius = config.rulesFor(p.getWorld()).nearRevealRadiusBlocks();
 
         int bottom = Math.floorDiv(
             p.getWorld().getMinHeight(), 16
@@ -799,7 +928,7 @@ public final class CaveVisTerrainDelivery
                             0,
                             Math.min(
                                 height,
-                                CaveVisSettings.alwaysVisibleSection() - bottom
+                                s.rules.alwaysVisibleSection() - bottom
                             )
                         );
 
@@ -912,7 +1041,7 @@ public final class CaveVisTerrainDelivery
                     } else {
                         wanted = new BitSet(height);
                         int surface = Math.clamp(
-                            CaveVisSettings.alwaysVisibleSection() - bottom, 0, height
+                            s.rules.alwaysVisibleSection() - bottom, 0, height
                         );
                         wanted.set(surface, height);
                         addSafety(s, key, wanted, bottom);
@@ -991,7 +1120,7 @@ public final class CaveVisTerrainDelivery
             }
 
             plugin.getLogger().log(
-                Level.SEVERE,
+                java.util.logging.Level.SEVERE,
                 "CaveVis column delivery failed; filtering remains enabled",
                 failure
             );
@@ -1160,6 +1289,7 @@ public final class CaveVisTerrainDelivery
         int sectionY,
         int sectionZ
     ) {
+        if (!s.enabled) return true;
         if (s.resetPending) return false;
         if (!s.active) return true;
 
@@ -1213,15 +1343,20 @@ public final class CaveVisTerrainDelivery
         UUID world;
         final Channel channel;
 
+        WorldRules rules;
+
         boolean active;
         boolean enabled;
         boolean resetPending;
+        ResourceKey<Level> pendingDimension;
 
         long epoch;
         long requested;
         long issued;
         long accepted = -1;
         long deliveryRevision;
+        long receivedSnapshotRevision;
+        CaveVisApi.ReceivedSections receivedSnapshot;
         int worldTop;
         int worldBottom;
 
