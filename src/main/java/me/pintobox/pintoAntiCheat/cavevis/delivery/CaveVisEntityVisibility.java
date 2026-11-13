@@ -17,6 +17,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.server.PluginDisableEvent;
 import org.bukkit.plugin.Plugin;
@@ -34,7 +35,8 @@ public final class CaveVisEntityVisibility
     private final Map<UUID, Watch> watches = new HashMap<>();
     private final Map<UUID, Set<Plugin>> alwaysVisibleOwners = new HashMap<>();
 
-    private int ticks;
+    private final List<List<Player>> viewerBuckets = new ArrayList<>();
+    private int nextViewerBucket;
 
     public CaveVisEntityVisibility(
         JavaPlugin plugin,
@@ -44,6 +46,15 @@ public final class CaveVisEntityVisibility
         this.plugin = plugin;
         this.terrain = terrain;
         this.config = config;
+
+        int interval = Math.max(1, CaveVisSettings.ENTITY_VISIBILITY_INTERVAL_TICKS);
+        for (int i = 0; i < interval; i++) {
+            viewerBuckets.add(new ArrayList<>());
+        }
+
+        for (Player viewer : Bukkit.getOnlinePlayers()) {
+            addViewer(viewer);
+        }
 
         Bukkit.getPluginManager().registerEvents(this, plugin);
     }
@@ -56,9 +67,10 @@ public final class CaveVisEntityVisibility
         Entity entity = event.getEntity();
         Player viewer = event.getPlayer();
 
-        if (entity instanceof Player
-            || !terrain.active(viewer)
-            || !config.rulesFor(viewer.getWorld()).entityCulling()) {
+        if (!terrain.active(viewer)
+            || !(entity instanceof Player
+            ? config.playerCulling
+            : config.rulesFor(viewer.getWorld()).entityCulling())) {
             return;
         }
 
@@ -74,13 +86,19 @@ public final class CaveVisEntityVisibility
         );
 
         if (allowed(viewer, entry, revision)) {
+            if (entity instanceof Player && entry.blocked) {
+                clearNameTag(viewer, entry);
+                entry.blocked = false;
+            }
             return;
         }
 
         event.setCancelled(true);
         entry.blocked = true;
 
-        if (entity.isVisibleByDefault() && !entry.apiHidden) {
+        if (entity instanceof Player) {
+            entry.playerTrackAttempted = true;
+        } else if (entity.isVisibleByDefault() && !entry.apiHidden) {
             entry.apiHidden = true;
             viewer.hideEntity(plugin, entity);
         }
@@ -98,24 +116,47 @@ public final class CaveVisEntityVisibility
         }
     }
 
+    private void addViewer(Player viewer) {
+        List<Player> smallest = viewerBuckets.getFirst();
+
+        for (List<Player> bucket : viewerBuckets) {
+            if (bucket.size() < smallest.size()) {
+                smallest = bucket;
+            }
+        }
+
+        smallest.add(viewer);
+    }
+
+    @EventHandler
+    public void join(PlayerJoinEvent event) {
+        addViewer(event.getPlayer());
+    }
+
     @EventHandler
     public void quit(PlayerQuitEvent event) {
-        watches.remove(event.getPlayer().getUniqueId());
+        Player viewer = event.getPlayer();
+
+        for (List<Player> bucket : viewerBuckets) {
+            if (bucket.remove(viewer)) {
+                break;
+            }
+        }
+
+        watches.remove(viewer.getUniqueId());
     }
 
     public void tick() {
-        if (++ticks < Math.max(
-            1,
-            CaveVisSettings.ENTITY_VISIBILITY_INTERVAL_TICKS
-        )) {
-            return;
-        }
+        List<Player> viewers = viewerBuckets.get(nextViewerBucket);
+        nextViewerBucket = (nextViewerBucket + 1) % viewerBuckets.size();
 
-        ticks = 0;
+        for (Player viewer : List.copyOf(viewers)) {
+            if (!viewer.isOnline()) {
+                continue;
+            }
+            boolean cullMobs = config.rulesFor(viewer.getWorld()).entityCulling();
 
-        for (Player viewer : Bukkit.getOnlinePlayers()) {
-            if (!terrain.active(viewer)
-                || !config.rulesFor(viewer.getWorld()).entityCulling()) {
+            if (!terrain.active(viewer) || (!cullMobs && !config.playerCulling)) {
                 Watch old = watches.remove(viewer.getUniqueId());
 
                 if (old != null) {
@@ -140,7 +181,7 @@ public final class CaveVisEntityVisibility
                     .forEachEntityTrackedBy(handle, entity -> {
                         Entity bukkit = entity.getBukkitEntity();
 
-                        if (!(bukkit instanceof Player)) {
+                        if (bukkit instanceof Player ? config.playerCulling : cullMobs) {
                             watch.entries.computeIfAbsent(
                                 bukkit.getUniqueId(),
                                 unused -> new Entry(bukkit)
@@ -179,6 +220,13 @@ public final class CaveVisEntityVisibility
                         entry
                     );
 
+                    continue;
+                }
+
+                if (entity instanceof Player target) {
+                    if (!updatePlayerEntry(viewer, target, entry, revision)) {
+                        watch.entries.remove(target.getUniqueId(), entry);
+                    }
                     continue;
                 }
 
@@ -246,7 +294,29 @@ public final class CaveVisEntityVisibility
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onEntityRemoved(EntityRemoveFromWorldEvent event) {
-        alwaysVisibleOwners.remove(event.getEntity().getUniqueId());
+        Entity entity = event.getEntity();
+        UUID id = entity.getUniqueId();
+        alwaysVisibleOwners.remove(id);
+
+        if (!(entity instanceof Player)) {
+            return;
+        }
+
+        for (var watched : watches.entrySet()) {
+            Watch watch = watched.getValue();
+            Entry entry = watch.entries.get(id);
+
+            if (entry == null || entry.entity.getEntityId() != entity.getEntityId()) {
+                continue;
+            }
+
+            watch.entries.remove(id);
+
+            Player viewer = Bukkit.getPlayer(watched.getKey());
+            if (viewer != null) {
+                clearNameTag(viewer, entry);
+            }
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -288,8 +358,16 @@ public final class CaveVisEntityVisibility
 
         if (entity.isGlowing()
             || (entity instanceof LivingEntity living
-            && living.hasPotionEffect(PotionEffectType.GLOWING))
-            || (entity instanceof TextDisplay text && text.isSeeThrough())
+            && living.hasPotionEffect(PotionEffectType.GLOWING))) {
+            return true;
+        }
+
+        if (entity instanceof Player target) {
+            if (target.getGameMode() == org.bukkit.GameMode.SPECTATOR
+                || target.equals(viewer.getSpectatorTarget())) {
+                return true;
+            }
+        } else if ((entity instanceof TextDisplay text && text.isSeeThrough())
             || entity.isCustomNameVisible()
             || alwaysVisibleOwners.containsKey(entity.getUniqueId())) {
             return true;
@@ -352,7 +430,52 @@ public final class CaveVisEntityVisibility
         return entry.allowed;
     }
 
+    private boolean updatePlayerEntry(
+        Player viewer, Player target, Entry entry, long revision
+    ) {
+        if (allowed(viewer, entry, revision)) {
+            if (entry.blocked) {
+                release(viewer, entry);
+            }
+            return true;
+        }
+
+        ChunkMap.TrackedEntity tracker = tracker(viewer, target);
+        if (tracker == null || !viewer.canSee(target)) {
+            clearNameTag(viewer, entry);
+            return false;
+        }
+
+        var observer = ((CraftPlayer) viewer).getHandle();
+        if (!entry.blocked) {
+            entry.blocked = true;
+            tracker.removePlayer(observer);
+        }
+
+        // If Paper would track this player, track() marks the attempt
+        // and cancels the real player's spawn.
+        entry.playerTrackAttempted = false;
+        tracker.updatePlayer(observer);
+
+        if (!entry.playerTrackAttempted) {
+            clearNameTag(viewer, entry);
+            return false;
+        }
+
+        entry.nameTag = CaveVisPlayerNameTag.update(
+            viewer, target, entry.nameTag,
+            CaveVisSettings.ENTITY_VISIBILITY_INTERVAL_TICKS
+        );
+        return true;
+    }
+
+    private static void clearNameTag(Player viewer, Entry entry) {
+        CaveVisPlayerNameTag.remove(viewer, entry.nameTag);
+        entry.nameTag = null;
+    }
+
     private void release(Player viewer, Entry entry) {
+        clearNameTag(viewer, entry);
         boolean apiHidden = entry.apiHidden;
 
         entry.apiHidden = false;
@@ -415,6 +538,7 @@ public final class CaveVisEntityVisibility
 
         watches.clear();
         alwaysVisibleOwners.clear();
+        viewerBuckets.clear();
     }
 
     private static int section(double coordinate) {
@@ -441,6 +565,9 @@ public final class CaveVisEntityVisibility
         boolean apiHidden;
         boolean checked;
         boolean allowed;
+
+        boolean playerTrackAttempted;
+        CaveVisPlayerNameTag nameTag;
 
         long revision;
 

@@ -5,6 +5,9 @@ cavevis:
     - world
 
   server:
+    # Cull player models in hidden sections and preserve permitted name tags.
+    player-culling: true
+
     # Rays cast for each visibility scan.
     rays-per-scan: 2048
 
