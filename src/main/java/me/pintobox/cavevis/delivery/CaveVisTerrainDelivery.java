@@ -1,16 +1,16 @@
-package me.pintobox.pintoAntiCheat.cavevis.delivery;
+package me.pintobox.cavevis.delivery;
 
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
-import me.pintobox.pintoAntiCheat.cavevis.api.CaveVisApi;
-import me.pintobox.pintoAntiCheat.cavevis.api.CaveVisApi.ReceivedSections;
-import me.pintobox.pintoAntiCheat.cavevis.api.CaveVisApi.Section;
-import me.pintobox.pintoAntiCheat.cavevis.api.CaveVisApi.WorldRules;
-import me.pintobox.pintoAntiCheat.cavevis.cache.CaveVisRayCache;
-import me.pintobox.pintoAntiCheat.cavevis.core.CaveVisConfiguration;
-import me.pintobox.pintoAntiCheat.cavevis.core.CaveVisSettings;
+import me.pintobox.cavevis.api.CaveVisApi;
+import me.pintobox.cavevis.api.CaveVisApi.ReceivedSections;
+import me.pintobox.cavevis.api.CaveVisApi.Section;
+import me.pintobox.cavevis.api.CaveVisApi.WorldRules;
+import me.pintobox.cavevis.cache.CaveVisRayCache;
+import me.pintobox.cavevis.core.CaveVisConfiguration;
+import me.pintobox.cavevis.core.CaveVisSettings;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.network.protocol.Packet;

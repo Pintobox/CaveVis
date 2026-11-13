@@ -1,6 +1,6 @@
-package me.pintobox.pintoAntiCheat.cavevis.visibility;
+package me.pintobox.cavevis.visibility;
 
-import me.pintobox.pintoAntiCheat.cavevis.cache.CaveVisRayCache;
+import me.pintobox.cavevis.cache.CaveVisRayCache;
 
 import java.util.BitSet;
 import java.util.SplittableRandom;

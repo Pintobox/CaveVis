@@ -1,4 +1,4 @@
-package me.pintobox.pintoAntiCheat.cavevis.core;
+package me.pintobox.cavevis.core;
 
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;

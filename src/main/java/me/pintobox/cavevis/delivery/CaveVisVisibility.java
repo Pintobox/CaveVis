@@ -1,6 +1,6 @@
-package me.pintobox.pintoAntiCheat.cavevis.delivery;
+package me.pintobox.cavevis.delivery;
 
-import me.pintobox.pintoAntiCheat.cavevis.visibility.CaveVisRayData;
+import me.pintobox.cavevis.visibility.CaveVisRayData;
 
 import java.util.BitSet;
 import java.util.UUID;

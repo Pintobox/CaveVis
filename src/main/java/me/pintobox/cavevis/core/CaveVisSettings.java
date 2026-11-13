@@ -1,4 +1,4 @@
-package me.pintobox.pintoAntiCheat.cavevis.core;
+package me.pintobox.cavevis.core;
 
 public final class CaveVisSettings {
     private CaveVisSettings() {}

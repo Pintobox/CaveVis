@@ -1,6 +1,6 @@
-name: PintoAntiCheat
+name: CaveVis
 version: '${version}'
-main: me.pintobox.pintoAntiCheat.PintoAntiCheat
+main: me.pintobox.cavevis.CaveVisPlugin
 api-version: '1.21.11'
 authors: [Pintobox]
 description: Server side cave visibility filtering
@@ -8,9 +8,9 @@ description: Server side cave visibility filtering
 commands:
   cavevis:
     description: Manage CaveVis builds, profiling, and player bypasses
-    permission: pintoanticheat.admin
+    permission: cavevis.admin
 
 permissions:
-  pintoanticheat.admin:
+  cavevis.admin:
     description: Allows access to CaveVis administration commands
     default: op

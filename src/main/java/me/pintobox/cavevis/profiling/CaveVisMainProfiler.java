@@ -1,4 +1,4 @@
-package me.pintobox.pintoAntiCheat.cavevis.profiling;
+package me.pintobox.cavevis.profiling;
 
 import java.util.Arrays;
 import java.util.Locale;

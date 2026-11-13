@@ -1,4 +1,4 @@
-package me.pintobox.pintoAntiCheat.cavevis.cache;
+package me.pintobox.cavevis.cache;
 
 import java.util.LinkedHashSet;
 import java.util.UUID;

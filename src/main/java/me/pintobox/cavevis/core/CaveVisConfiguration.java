@@ -1,6 +1,6 @@
-package me.pintobox.pintoAntiCheat.cavevis.core;
+package me.pintobox.cavevis.core;
 
-import me.pintobox.pintoAntiCheat.cavevis.api.CaveVisApi.WorldRules;
+import me.pintobox.cavevis.api.CaveVisApi.WorldRules;
 import org.bukkit.World;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.plugin.java.JavaPlugin;

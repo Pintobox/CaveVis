@@ -1,4 +1,4 @@
-# PintoAntiCheat
+# CaveVis
 
 An experimental Minecraft 1.21.11 server plugin. Its main feature, CaveVis,
 limits the underground terrain sent to each player to reduce what freecam
@@ -9,15 +9,15 @@ clients can see.
 Requires JDK 21 and stock Paper 1.21.11. Tested on Paper build 132.
 
 ```powershell
-git clone https://github.com/Pintobox/PintoAntiCheat.git
-cd PintoAntiCheat
+git clone https://github.com/Pintobox/CaveVis.git
+cd CaveVis
 .\gradlew.bat runServer
 ```
 
-`runServer` launches a stock Paper test server with PintoAntiCheat loaded.
+`runServer` launches a stock Paper test server with CaveVis loaded.
 
 To build the plugin for an existing server, run `.\gradlew.bat :jar`
-and copy the PintoAntiCheat JAR from the root `build/libs/` folder
+and copy the CaveVis JAR from the root `build/libs/` folder
 into the server's `plugins/` folder.
 
 ## Demo
@@ -29,7 +29,7 @@ into the server's `plugins/` folder.
 
 ## Admin commands
 
-All `/cavevis` commands require the `pintoanticheat.admin` permission.
+All `/cavevis` commands require the `cavevis.admin` permission.
 Server operators have it by default. Run `/cavevis` to see the command list in-game.
 
 | Command | Effect |
@@ -52,12 +52,12 @@ so the visual change is gradual.
 
 ## Using CaveVis from another plugin
 
-Server admins install only the `PintoAntiCheat` JAR in `plugins/`. It
+Server admins install only the `CaveVis` JAR in `plugins/`. It
 already includes `CaveVisApi`. The separate `cavevis-api` JAR is a
 compile-time dependency for developers integrating with CaveVis.
 
 To publish the API to your local Maven repository, run this from the
-PintoAntiCheat project root:
+CaveVis project root:
 
 ```powershell
 .\gradlew.bat :cavevis-api:publishToMavenLocal
@@ -75,13 +75,13 @@ dependencies {
 }
 ```
 
-Declare PintoAntiCheat as a required dependency in your plugin's `plugin.yml`:
+Declare CaveVis as a required dependency in your plugin's `plugin.yml`:
 
 ```yaml
-depend: [PintoAntiCheat]
+depend: [CaveVis]
 ```
 
-Import `me.pintobox.pintoAntiCheat.cavevis.api.CaveVisApi` and call the API
+Import `me.pintobox.cavevis.api.CaveVisApi` and call the API
 on the server thread.
 
 ```java
@@ -198,7 +198,7 @@ filter the chunk data it sends to each player.
 
 ## Configuration
 
-Edit `plugins/PintoAntiCheat/config.yml` and restart the server.
+Edit `plugins/CaveVis/config.yml` and restart the server.
 CaveVis automatically enables the worlds listed under `cavevis.enabled-worlds`.
 The default list contains `world`. Another plugin can also enable a temporary
 world through the API.

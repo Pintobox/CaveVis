@@ -1,4 +1,4 @@
-package me.pintobox.pintoAntiCheat.cavevis.delivery;
+package me.pintobox.cavevis.delivery;
 
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.server.level.ServerLevel;

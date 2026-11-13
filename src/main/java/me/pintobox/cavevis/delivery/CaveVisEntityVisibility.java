@@ -1,9 +1,9 @@
-package me.pintobox.pintoAntiCheat.cavevis.delivery;
+package me.pintobox.cavevis.delivery;
 
 import com.destroystokyo.paper.event.entity.EntityRemoveFromWorldEvent;
 import io.papermc.paper.event.player.PlayerTrackEntityEvent;
-import me.pintobox.pintoAntiCheat.cavevis.core.CaveVisConfiguration;
-import me.pintobox.pintoAntiCheat.cavevis.core.CaveVisSettings;
+import me.pintobox.cavevis.core.CaveVisConfiguration;
+import me.pintobox.cavevis.core.CaveVisSettings;
 import net.minecraft.server.level.ChunkMap;
 import net.minecraft.world.phys.AABB;
 import org.bukkit.Bukkit;

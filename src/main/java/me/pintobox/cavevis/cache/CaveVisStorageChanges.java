@@ -1,4 +1,4 @@
-package me.pintobox.pintoAntiCheat.cavevis.cache;
+package me.pintobox.cavevis.cache;
 
 import ca.spottedleaf.moonrise.patches.fast_palette.FastPaletteData;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;

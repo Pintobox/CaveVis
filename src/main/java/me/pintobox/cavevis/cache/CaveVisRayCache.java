@@ -1,12 +1,12 @@
-package me.pintobox.pintoAntiCheat.cavevis.cache;
+package me.pintobox.cavevis.cache;
 
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
-import me.pintobox.pintoAntiCheat.cavevis.core.CaveVisConfiguration;
-import me.pintobox.pintoAntiCheat.cavevis.core.CaveVisSettings;
-import me.pintobox.pintoAntiCheat.cavevis.delivery.CaveVisVisibility;
-import me.pintobox.pintoAntiCheat.cavevis.profiling.CaveVisPrepProfiler;
-import me.pintobox.pintoAntiCheat.cavevis.visibility.CaveVisRayData;
-import me.pintobox.pintoAntiCheat.cavevis.visibility.CaveVisRaycast;
+import me.pintobox.cavevis.core.CaveVisConfiguration;
+import me.pintobox.cavevis.core.CaveVisSettings;
+import me.pintobox.cavevis.delivery.CaveVisVisibility;
+import me.pintobox.cavevis.profiling.CaveVisPrepProfiler;
+import me.pintobox.cavevis.visibility.CaveVisRayData;
+import me.pintobox.cavevis.visibility.CaveVisRaycast;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;

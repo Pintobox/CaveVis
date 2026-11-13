@@ -1,9 +1,9 @@
-package me.pintobox.pintoAntiCheat;
+package me.pintobox.cavevis;
 
-import me.pintobox.pintoAntiCheat.cavevis.core.CaveVis;
+import me.pintobox.cavevis.core.CaveVis;
 import org.bukkit.plugin.java.JavaPlugin;
 
-public final class PintoAntiCheat extends JavaPlugin {
+public final class CaveVisPlugin extends JavaPlugin {
     private CaveVis caveVis;
 
     @Override

@@ -1,4 +1,4 @@
-package me.pintobox.pintoAntiCheat.cavevis.visibility;
+package me.pintobox.cavevis.visibility;
 
 import java.util.BitSet;
 

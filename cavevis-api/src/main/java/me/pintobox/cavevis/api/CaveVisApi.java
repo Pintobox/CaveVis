@@ -1,4 +1,4 @@
-package me.pintobox.pintoAntiCheat.cavevis.api;
+package me.pintobox.cavevis.api;
 
 import org.bukkit.World;
 import org.bukkit.entity.Entity;

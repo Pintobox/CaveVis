@@ -1,4 +1,4 @@
-package me.pintobox.pintoAntiCheat.cavevis.delivery;
+package me.pintobox.cavevis.delivery;
 
 import io.papermc.paper.adventure.PaperAdventure;
 import net.minecraft.network.chat.Component;

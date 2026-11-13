@@ -1,10 +1,10 @@
-package me.pintobox.pintoAntiCheat.cavevis.core;
+package me.pintobox.cavevis.core;
 
-import me.pintobox.pintoAntiCheat.cavevis.api.CaveVisApi;
-import me.pintobox.pintoAntiCheat.cavevis.cache.CaveVisRayCache;
-import me.pintobox.pintoAntiCheat.cavevis.delivery.CaveVisEntityVisibility;
-import me.pintobox.pintoAntiCheat.cavevis.delivery.CaveVisTerrainDelivery;
-import me.pintobox.pintoAntiCheat.cavevis.profiling.CaveVisMainProfiler;
+import me.pintobox.cavevis.api.CaveVisApi;
+import me.pintobox.cavevis.cache.CaveVisRayCache;
+import me.pintobox.cavevis.delivery.CaveVisEntityVisibility;
+import me.pintobox.cavevis.delivery.CaveVisTerrainDelivery;
+import me.pintobox.cavevis.profiling.CaveVisMainProfiler;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
