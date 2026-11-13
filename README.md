@@ -1,8 +1,8 @@
 # CaveVis
 
-An experimental Minecraft 1.21.11 server plugin. Its main feature, CaveVis,
-limits the underground terrain sent to each player to reduce what freecam
-clients can see.
+CaveVis is an experimental plugin for Paper 1.21.11. It sends underground
+chunk sections to each player as they become visible, limiting the terrain
+freecam clients can reveal.
 
 ## Build and run
 
