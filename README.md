@@ -16,8 +16,9 @@ cd PintoAntiCheat
 
 `runServer` launches a stock Paper test server with PintoAntiCheat loaded.
 
-To build the plugin for an existing server, run `.\gradlew.bat build` and
-copy the plugin JAR from `build/libs/` into the server's `plugins/` folder.
+To build the plugin for an existing server, run `.\gradlew.bat :jar`
+and copy the PintoAntiCheat JAR from the root `build/libs/` folder
+into the server's `plugins/` folder.
 
 ## Demo
 
@@ -51,8 +52,34 @@ so the visual change is gradual.
 
 ## Using CaveVis from another plugin
 
-Add PintoAntiCheat as a `compileOnly` dependency and declare
-`depend: [PintoAntiCheat]` in your plugin's `plugin.yml`.
+Server admins install only the `PintoAntiCheat` JAR in `plugins/`. It
+already includes `CaveVisApi`. The separate `cavevis-api` JAR is a
+compile-time dependency for developers integrating with CaveVis.
+
+To publish the API to your local Maven repository, run this from the
+PintoAntiCheat project root:
+
+```powershell
+.\gradlew.bat :cavevis-api:publishToMavenLocal
+```
+
+Then add the API to your plugin's `build.gradle`:
+
+```groovy
+repositories {
+    mavenLocal()
+}
+
+dependencies {
+    compileOnly 'me.pintobox:cavevis-api:1.0.0'
+}
+```
+
+Declare PintoAntiCheat as a required dependency in your plugin's `plugin.yml`:
+
+```yaml
+depend: [PintoAntiCheat]
+```
 
 Import `me.pintobox.pintoAntiCheat.cavevis.api.CaveVisApi` and call the API
 on the server thread.

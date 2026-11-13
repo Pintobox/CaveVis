@@ -47,3 +47,9 @@ paperweight {
     reobfArtifactConfiguration =
             io.papermc.paperweight.userdev.ReobfArtifactConfiguration.getMOJANG_PRODUCTION()
 }
+
+sourceSets {
+    main {
+        java.srcDir 'cavevis-api/src/main/java'
+    }
+}

@@ -35,10 +35,6 @@ public final class CaveVisSettings {
     public static final long BUILD_BUDGET_NANOS = nanos(BUILD_BUDGET_MS);
     public static final long EDIT_BUDGET_NANOS = nanos(EDIT_BUDGET_MS);
 
-    public static int alwaysVisibleSection() {
-        return Math.floorDiv(ALWAYS_VISIBLE_FROM_Y, 16);
-    }
-
     private static long nanos(double milliseconds) {
         return Math.max(1L, (long) (milliseconds * 1_000_000.0));
     }
