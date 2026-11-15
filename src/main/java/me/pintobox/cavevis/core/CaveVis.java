@@ -263,6 +263,22 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
             && terrain.hasManualVisibilityBypass(Objects.requireNonNull(player, "player"));
     }
 
+    @Override
+    public boolean isVisibilityBypassed(Player player) {
+        requireVisibilityQueryThread();
+
+        return cache != null
+            && terrain.hasVisibilityBypass(Objects.requireNonNull(player, "player"));
+    }
+
+    @Override
+    public boolean isEnabledIn(World world) {
+        requireVisibilityQueryThread();
+
+        return cache != null
+            && config.enabled(Objects.requireNonNull(world, "world"));
+    }
+
     private static void requireVisibilityQueryThread() {
         if (!Bukkit.isPrimaryThread()) {
             throw new IllegalStateException(

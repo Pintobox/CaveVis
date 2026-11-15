@@ -45,7 +45,7 @@ Server operators have it by default. Run `/cavevis` to see the command list in-g
 | `/cavevis bypass on [player]` | Disable CaveVis filtering for yourself or the named online player. |
 | `/cavevis bypass off [player]` | Clear the manual bypass for yourself or the named online player. |
 
-When running `bypass` from the console, specify an online player. The bypass
+When running `bypass` from the console, specify an online player. The manual bypass
 follows the player across world changes and clears when they disconnect.
 CaveVis refreshes chunks already on the client through its delivery queue,
 so the visual change is gradual.
@@ -71,7 +71,7 @@ repositories {
 }
 
 dependencies {
-    compileOnly 'me.pintobox:cavevis-api:1.0.0'
+    compileOnly 'me.pintobox:cavevis-api:1.1.0'
 }
 ```
 
@@ -102,6 +102,15 @@ boolean manualBypass = caveVis.hasVisibilityBypass(player);
 caveVis.setVisibilityBypass(player, false);
 ```
 
+`hasVisibilityBypass(player)` checks the manual bypass. Use
+`isVisibilityBypassed(player)` to check whether either the manual bypass or
+the automatic spectator bypass applies.
+
+```java
+boolean bypassed = caveVis.isVisibilityBypassed(player);
+boolean enabled = caveVis.isEnabledIn(player.getWorld());
+```
+
 ### Enable a temporary world
 
 After creating or loading an arena world, call `enableTemporaryWorld()` before
@@ -123,6 +132,9 @@ caveVis.enableTemporaryWorld(arenaWorld, rules);
 
 The rules stay in memory until the world unloads. Unloading also drops that
 world's preloaded opacity. Call `enableTemporaryWorld()` again if you reload it.
+
+`isEnabledIn(world)` checks whether the world is enabled through `config.yml`
+or temporarily through the API.
 
 ### Optionally preload opacity
 

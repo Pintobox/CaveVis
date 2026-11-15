@@ -18,6 +18,12 @@ public interface CaveVisApi {
     void enableTemporaryWorld(World world, WorldRules rules);
 
     /**
+     * Checks whether CaveVis is enabled for the world through config or
+     * temporary API registration. Call on the server thread.
+     */
+    boolean isEnabledIn(World world);
+
+    /**
      * Preloads and pins opacity for a square centered on the given chunk.
      * A radius of 1 covers 3 by 3 chunk columns.
      *
@@ -73,6 +79,12 @@ public interface CaveVisApi {
 
     /** Checks the player's manual session bypass. Call on the server thread. */
     boolean hasVisibilityBypass(Player player);
+
+    /**
+     * Checks whether a manual or automatic spectator bypass applies to the player.
+     * Call on the server thread. Returns false when the player has no delivery state.
+     */
+    boolean isVisibilityBypassed(Player player);
 
     /**
      * Sets whether CaveVis should exempt this entity from terrain-based culling
