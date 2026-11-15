@@ -68,7 +68,7 @@ final class CaveVisCommands implements CommandExecutor, TabCompleter {
                     }
 
                     caveVis.setVisibilityBypass(target, bypass);
-                    message(sender, "Visibility bypass for " + target.getName()
+                    message(sender, "Manual visibility bypass for " + target.getName()
                         + (bypass ? " enabled." : " disabled."));
                 }
                 case "profile" -> {

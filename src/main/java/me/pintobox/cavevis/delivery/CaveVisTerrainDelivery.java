@@ -18,6 +18,7 @@ import net.minecraft.network.protocol.game.*;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.Level;
 import org.bukkit.Bukkit;
+import org.bukkit.GameMode;
 import org.bukkit.World;
 import org.bukkit.craftbukkit.CraftWorld;
 import org.bukkit.craftbukkit.entity.CraftPlayer;
@@ -156,7 +157,9 @@ public final class CaveVisTerrainDelivery
         WorldPolicy policy = policyFor(player.getWorld());
         s.rules = policy.rules();
         s.enabled = policy.enabled();
-        s.active = s.enabled;
+        s.spectatorBypass = config.spectatorBypass && player.getGameMode() == GameMode.SPECTATOR;
+        s.bypass = s.spectatorBypass;
+        s.active = s.enabled && !s.bypass;
         s.worldTop = Math.floorDiv(player.getWorld().getMaxHeight(), 16);
         s.worldBottom = Math.floorDiv(player.getWorld().getMinHeight(), 16);
 
@@ -581,6 +584,17 @@ public final class CaveVisTerrainDelivery
         }
     }
 
+    public boolean hasManualVisibilityBypass(Player player) {
+        State s = states.get(player.getUniqueId());
+        if (s == null) {
+            return false;
+        }
+
+        synchronized (s) {
+            return s.manualBypass;
+        }
+    }
+
     public boolean setVisibilityBypass(Player player, boolean bypass) {
         State s = states.get(player.getUniqueId());
         if (s == null) {
@@ -588,57 +602,76 @@ public final class CaveVisTerrainDelivery
         }
 
         synchronized (s) {
-            if (s.bypass == bypass) {
-                return false;
-            }
-
-            s.bypass = bypass;
-            s.active = s.enabled && !bypass && !s.resetPending;
-            s.epoch++;
-            s.deliveryRevision++;
-            s.receivedSnapshot = null;
-            s.accepted = -1;
-            s.visible = null;
-
-            s.queue.clear();
-            s.urgent.clear();
-            s.nearBox = null;
-            s.nearDirty = true;
-
-            if (bypass) {
-                // Include pending columns whose original packets CaveVis intercepted.
-                s.bypassColumns.addAll(s.columns.keySet());
-
-                for (var entry : s.columns.entrySet()) {
-                    Column c = entry.getValue();
-                    c.inFlight = false;
-                    c.retryScheduled = false;
-                    c.writingMask = null;
-                    c.fresh = true;
-                    c.queued = false;
-                    c.urgentQueued = false;
-                    c.near = false;
-
-                    enqueue(s, entry.getKey(), c);
-                }
-            } else {
-                // Fresh columns start with empty delivered masks.
-                s.columns.clear();
-
-                if (s.enabled) {
-                    for (long key : s.bypassColumns) {
-                        Column c = new Column();
-                        c.required = ++s.requested;
-                        s.columns.put(key, c);
-                        enqueue(s, key, c);
-                    }
-                }
-
-                s.bypassColumns.clear();
-            }
-
-            return true;
+            s.manualBypass = bypass;
+            return updateVisibilityBypass(s);
         }
+    }
+
+    public boolean setSpectatorBypass(Player player, boolean bypass) {
+        State s = states.get(player.getUniqueId());
+        if (s == null) {
+            return false;
+        }
+
+        synchronized (s) {
+            s.spectatorBypass = bypass;
+            return updateVisibilityBypass(s);
+        }
+    }
+
+    // Called with the delivery state locked.
+    private static boolean updateVisibilityBypass(State s) {
+        boolean bypass = s.manualBypass || s.spectatorBypass;
+        if (s.bypass == bypass) {
+            return false;
+        }
+
+        s.bypass = bypass;
+        s.active = s.enabled && !bypass && !s.resetPending;
+        s.epoch++;
+        s.deliveryRevision++;
+        s.receivedSnapshot = null;
+        s.accepted = -1;
+        s.visible = null;
+
+        s.queue.clear();
+        s.urgent.clear();
+        s.nearBox = null;
+        s.nearDirty = true;
+
+        if (bypass) {
+            // Include pending columns whose original packets CaveVis intercepted.
+            s.bypassColumns.addAll(s.columns.keySet());
+
+            for (var entry : s.columns.entrySet()) {
+                Column c = entry.getValue();
+                c.inFlight = false;
+                c.retryScheduled = false;
+                c.writingMask = null;
+                c.fresh = true;
+                c.queued = false;
+                c.urgentQueued = false;
+                c.near = false;
+
+                enqueue(s, entry.getKey(), c);
+            }
+        } else {
+            // Fresh columns start with empty delivered masks.
+            s.columns.clear();
+
+            if (s.enabled) {
+                for (long key : s.bypassColumns) {
+                    Column c = new Column();
+                    c.required = ++s.requested;
+                    s.columns.put(key, c);
+                    enqueue(s, key, c);
+                }
+            }
+
+            s.bypassColumns.clear();
+        }
+
+        return true;
     }
 
     public void disable(Player player) {
@@ -1435,7 +1468,10 @@ public final class CaveVisTerrainDelivery
         boolean resetPending;
         ResourceKey<Level> pendingDimension;
 
+        boolean manualBypass;
+        boolean spectatorBypass;
         boolean bypass;
+
         final Set<Long> bypassColumns = new HashSet<>();
 
         long epoch;

@@ -8,6 +8,9 @@ cavevis:
     # Cull player models in hidden sections and preserve permitted name tags.
     player-culling: true
 
+    # Let players in spectator mode bypass CaveVis filtering.
+    spectator-bypass: true
+
     # Rays cast for each visibility scan.
     rays-per-scan: 2048
 

@@ -7,6 +7,7 @@ import me.pintobox.cavevis.delivery.CaveVisTerrainDelivery;
 import me.pintobox.cavevis.profiling.CaveVisMainProfiler;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
+import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.command.CommandSender;
@@ -19,6 +20,7 @@ import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.player.PlayerGameModeChangeEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.Plugin;
@@ -233,10 +235,12 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
             throw new IllegalArgumentException("The player must be online");
         }
 
-        if (!terrain.setVisibilityBypass(player, bypass)) {
-            return;
+        if (terrain.setVisibilityBypass(player, bypass)) {
+            resetScansAfterBypassChange(player);
         }
+    }
 
+    private void resetScansAfterBypassChange(Player player) {
         UUID playerId = player.getUniqueId();
         pendingScans.remove(playerId);
 
@@ -245,8 +249,8 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
         );
 
         cancel(session);
-        session.automatic = !bypass;
-        session.force = !bypass;
+        session.automatic = !terrain.hasVisibilityBypass(player);
+        session.force = session.automatic;
         session.failures = 0;
         session.retryAtTick = 0;
     }
@@ -256,7 +260,7 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
         requireVisibilityQueryThread();
 
         return cache != null
-            && terrain.hasVisibilityBypass(Objects.requireNonNull(player, "player"));
+            && terrain.hasManualVisibilityBypass(Objects.requireNonNull(player, "player"));
     }
 
     private static void requireVisibilityQueryThread() {
@@ -636,6 +640,20 @@ public final class CaveVis implements CaveVisApi, Listener, AutoCloseable {
         );
         session.automatic = true;
         session.force = true;
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onGameModeChange(PlayerGameModeChangeEvent event) {
+        if (!config.spectatorBypass) {
+            return;
+        }
+
+        Player player = event.getPlayer();
+        boolean spectator = event.getNewGameMode() == GameMode.SPECTATOR;
+
+        if (terrain.setSpectatorBypass(player, spectator)) {
+            resetScansAfterBypassChange(player);
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)

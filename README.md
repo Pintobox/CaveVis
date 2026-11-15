@@ -43,7 +43,7 @@ Server operators have it by default. Run `/cavevis` to see the command list in-g
 | `/cavevis profile detail` | Toggle detailed scan preparation timings. Enable profiling first. |
 | `/cavevis raystats [tick]` | Show visibility scan statistics. Add `tick` to see server tick timings. |
 | `/cavevis bypass on [player]` | Disable CaveVis filtering for yourself or the named online player. |
-| `/cavevis bypass off [player]` | Restore CaveVis filtering for yourself or the named online player. |
+| `/cavevis bypass off [player]` | Clear the manual bypass for yourself or the named online player. |
 
 When running `bypass` from the console, specify an online player. The bypass
 follows the player across world changes and clears when they disconnect.
@@ -94,12 +94,12 @@ if (caveVis == null) {
 ### Bypass filtering for a player
 
 Call these methods on the server thread with an online player. They use the
-same session bypass as the admin command.
+same manual session bypass as the admin command.
 
 ```java
-caveVis.setVisibilityBypass(player, true);  // Disable filtering
-boolean bypassed = caveVis.hasVisibilityBypass(player);
-caveVis.setVisibilityBypass(player, false); // Restore filtering
+caveVis.setVisibilityBypass(player, true);
+boolean manualBypass = caveVis.hasVisibilityBypass(player);
+caveVis.setVisibilityBypass(player, false);
 ```
 
 ### Enable a temporary world

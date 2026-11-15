@@ -64,13 +64,14 @@ public interface CaveVisApi {
     ReceivedSections getReceivedSections(Player viewer);
 
     /**
-     * Sets whether CaveVis filters terrain and effects for this online player.
-     * Call on the server thread. The bypass lasts until the player disconnects.
-     * Existing chunk columns are refreshed through the delivery queue.
+     * Sets the manual visibility bypass for this online player.
+     * Call on the server thread. The manual bypass clears on disconnect.
+     * An automatic spectator bypass can also apply. When effective bypass
+     * changes, existing chunk columns are refreshed through the delivery queue.
      */
     void setVisibilityBypass(Player player, boolean bypass);
 
-    /** Checks the player's session bypass. Call on the server thread. */
+    /** Checks the player's manual session bypass. Call on the server thread. */
     boolean hasVisibilityBypass(Player player);
 
     /**

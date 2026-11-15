@@ -16,6 +16,7 @@ public final class CaveVisConfiguration {
     private final Map<UUID, WorldRules> temporaryRules = new HashMap<>();
 
     public final boolean playerCulling;
+    public final boolean spectatorBypass;
     public final int raysPerScan;
     public final int rayWorkers;
     public final int scanStartsPerTick;
@@ -25,6 +26,7 @@ public final class CaveVisConfiguration {
         enabledWorlds = Set.copyOf(root.getStringList("enabled-worlds"));
 
         playerCulling = flag(root, "server.player-culling", true);
+        spectatorBypass = flag(root, "server.spectator-bypass", true);
         raysPerScan = integer(
             root, "server.rays-per-scan", CaveVisSettings.DEFAULT_RAYS
         );
