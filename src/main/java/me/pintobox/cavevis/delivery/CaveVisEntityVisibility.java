@@ -4,6 +4,7 @@ import com.destroystokyo.paper.event.entity.EntityRemoveFromWorldEvent;
 import io.papermc.paper.event.player.PlayerTrackEntityEvent;
 import me.pintobox.cavevis.core.CaveVisConfiguration;
 import me.pintobox.cavevis.core.CaveVisSettings;
+import net.minecraft.network.protocol.game.ClientboundSetPassengersPacket;
 import net.minecraft.server.level.ChunkMap;
 import net.minecraft.world.phys.AABB;
 import org.bukkit.Bukkit;
@@ -349,7 +350,56 @@ public final class CaveVisEntityVisibility
         return old;
     }
 
-    private boolean allowed(
+    private boolean allowed(Player viewer, Entry entry, long revision) {
+        if (allowedDirectly(viewer, entry, revision)) {
+            return true;
+        }
+
+        var handle = ((CraftEntity) entry.entity).getHandle();
+        if (handle.getPassengers().isEmpty()) {
+            return false;
+        }
+
+        boolean cullEntities = config.rulesFor(viewer.getWorld()).entityCulling();
+        Watch watch = watches.get(viewer.getUniqueId());
+
+        for (var passengerHandle : handle.getIndirectPassengers()) {
+            Entity passenger = passengerHandle.getBukkitEntity();
+
+            // The viewer needs their own vehicle even if they're in hidden terrain.
+            if (passenger.equals(viewer)) {
+                return true;
+            }
+
+            if (!passenger.isValid() || !viewer.canSee(passenger)) {
+                continue;
+            }
+
+            boolean cullPassenger = passenger instanceof Player
+                ? config.playerCulling
+                : cullEntities;
+
+            if (!cullPassenger) {
+                return true;
+            }
+
+            Entry passengerEntry = watch == null
+                ? null
+                : watch.entries.get(passenger.getUniqueId());
+
+            if (passengerEntry == null || passengerEntry.entity != passenger) {
+                passengerEntry = new Entry(passenger);
+            }
+
+            if (allowedDirectly(viewer, passengerEntry, revision)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private boolean allowedDirectly(
         Player viewer,
         Entry entry,
         long revision
@@ -477,6 +527,7 @@ public final class CaveVisEntityVisibility
     private void release(Player viewer, Entry entry) {
         clearNameTag(viewer, entry);
         boolean apiHidden = entry.apiHidden;
+        boolean wasBlocked = entry.blocked;
 
         entry.apiHidden = false;
         entry.blocked = false;
@@ -486,14 +537,36 @@ public final class CaveVisEntityVisibility
             viewer.showEntity(plugin, entry.entity);
         } else if (entry.entity.isValid()
             && entry.entity.getWorld().equals(viewer.getWorld())) {
-            ChunkMap.TrackedEntity tracker =
-                tracker(viewer, entry.entity);
+            ChunkMap.TrackedEntity tracker = tracker(viewer, entry.entity);
 
             if (tracker != null) {
-                tracker.updatePlayer(
-                    ((CraftPlayer) viewer).getHandle()
-                );
+                tracker.updatePlayer(((CraftPlayer) viewer).getHandle());
             }
+        }
+
+        if (wasBlocked && entry.entity.isValid()
+            && entry.entity.getWorld().equals(viewer.getWorld())) {
+            var handle = ((CraftEntity) entry.entity).getHandle();
+
+            if (!handle.getPassengers().isEmpty()) {
+                resendPassengers(viewer, entry.entity);
+            }
+
+            Entity vehicle = entry.entity.getVehicle();
+            if (vehicle != null) {
+                resendPassengers(viewer, vehicle);
+            }
+        }
+    }
+
+    private static void resendPassengers(Player viewer, Entity vehicle) {
+        var connection = ((CraftPlayer) viewer).getHandle().connection;
+        ChunkMap.TrackedEntity tracked = tracker(viewer, vehicle);
+
+        if (tracked != null && tracked.seenBy.contains(connection)) {
+            connection.send(new ClientboundSetPassengersPacket(
+                ((CraftEntity) vehicle).getHandle()
+            ));
         }
     }
 
